@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  color: #04291f;
+  background-color: #f5fdf9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --green-900: #0d4d3c;
+  --green-700: #0f6a52;
+  --green-600: #168b66;
+  --mint-50: #e8f7f0;
+  --gray-600: #4b6358;
+  --gray-500: #6f7d74;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-y: auto;
+  background: radial-gradient(circle at top, rgba(101, 222, 190, 0.35), transparent 55%),
+    linear-gradient(180deg, #f5fdf9 0%, #e1f4e9 45%, #f8fffb 100%);
+  color: var(--green-900);
+}
+
+#root {
+  width: 100%;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+::selection {
+  background: rgba(3, 142, 105, 0.3);
+  color: #fff;
+}

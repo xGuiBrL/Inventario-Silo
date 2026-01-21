@@ -1,0 +1,3793 @@
+import { useCallback, useEffect, useMemo, useState, useRef, useId } from 'react'
+import { BrowserRouter as Router, Routes, Route, NavLink, Link, Navigate, useNavigate } from 'react-router-dom'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import { utils, writeFile } from 'xlsx'
+import './App.css'
+import { API_URL } from './config'
+
+const QUERIES = {
+  login: `mutation Login($usuario: String!, $password: String!) {
+    login(usuario: $usuario, password: $password)
+  }`,
+  perfilActual: `query PerfilActual {
+    perfilActual {
+      id
+      nombreUsuario
+      nombre
+    }
+  }`,
+  items: `query Items {
+    items {
+      id
+      codigoMaterial
+      nombreMaterial
+      descripcionMaterial
+      cantidadStock
+      localizacion
+      unidadMedida
+    }
+  }`,
+  recepciones: `query Recepciones {
+    recepciones {
+      id
+      fecha
+      recibidoDe
+      codigoMaterial
+      descripcionMaterial
+      cantidadRecibida
+      unidadMedida
+      observaciones
+    }
+  }`,
+  entregas: `query Entregas {
+    entregas {
+      id
+      fecha
+      entregadoA
+      codigoMaterial
+      descripcionMaterial
+      cantidadEntregada
+      unidadMedida
+      observaciones
+    }
+  }`,
+  reporte: `query ReporteMensual($desde: DateTime!, $hasta: DateTime!) {
+    reporteMensual(desde: $desde, hasta: $hasta) {
+      codigoMaterial
+      nombreMaterial
+      totalEntradas
+      totalSalidas
+      totalEntradasSinRegistro
+      totalSalidasSinRegistro
+      stockDespuesBalance
+      unidadMedida
+    }
+  }`,
+  kardex: `query Kardex($codigoMaterial: String!) {
+    kardexPorCodigoMaterial(codigoMaterial: $codigoMaterial) {
+      codigoMaterial
+      nombreMaterial
+      stockActual
+      movimientos {
+        fecha
+        tipo
+        referencia
+        descripcion
+        observaciones
+        cantidad
+        unidadMedida
+        origen
+        registroId
+        esSinRegistro
+      }
+    }
+  }`,
+  actualizarItem: `mutation ActualizarItem($input: ItemUpdateInput!) {
+    actualizarItem(input: $input) {
+      id
+      codigoMaterial
+      nombreMaterial
+      descripcionMaterial
+      cantidadStock
+      localizacion
+      unidadMedida
+    }
+  }`,
+  eliminarItem: `mutation EliminarItem($id: String!) {
+    eliminarItem(id: $id)
+  }`,
+  crearItem: `mutation CrearItem($input: ItemInput!) {
+    crearItem(input: $input) {
+      id
+      codigoMaterial
+      nombreMaterial
+      descripcionMaterial
+      cantidadStock
+      localizacion
+      unidadMedida
+    }
+  }`,
+  crearRecepcion: `mutation CrearRecepcion($input: RecepcionInput!) {
+    crearRecepcion(input: $input) {
+      id
+      fecha
+      recibidoDe
+      codigoMaterial
+      descripcionMaterial
+      cantidadRecibida
+      unidadMedida
+      observaciones
+    }
+  }`,
+  actualizarRecepcion: `mutation ActualizarRecepcion($input: RecepcionUpdateInput!) {
+    actualizarRecepcion(input: $input) {
+      id
+      fecha
+      recibidoDe
+      codigoMaterial
+      descripcionMaterial
+      cantidadRecibida
+      unidadMedida
+      observaciones
+    }
+  }`,
+  eliminarRecepcion: `mutation EliminarRecepcion($id: String!) {
+    eliminarRecepcion(id: $id)
+  }`,
+  crearEntrega: `mutation CrearEntrega($input: EntregaInput!) {
+    crearEntrega(input: $input) {
+      id
+      fecha
+      entregadoA
+      codigoMaterial
+      descripcionMaterial
+      cantidadEntregada
+      unidadMedida
+      observaciones
+    }
+  }`,
+  actualizarEntrega: `mutation ActualizarEntrega($input: EntregaUpdateInput!) {
+    actualizarEntrega(input: $input) {
+      id
+      fecha
+      entregadoA
+      codigoMaterial
+      descripcionMaterial
+      cantidadEntregada
+      unidadMedida
+      observaciones
+    }
+  }`,
+  eliminarEntrega: `mutation EliminarEntrega($id: String!) {
+    eliminarEntrega(id: $id)
+  }`
+}
+
+const formatDecimal = (value) => {
+  if (value === null || value === undefined) return ''
+  const number = typeof value === 'number' ? value : Number(value)
+  if (Number.isNaN(number)) return ''
+  return new Intl.NumberFormat('es-BO', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(number)
+}
+
+const formatDate = (value) => {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('es-BO', { dateStyle: 'medium' }).format(date)
+}
+
+const formatDateInput = (value) => {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const toLocalDate = (value, endOfDay = false) => {
+  if (!value) return null
+  let date = null
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const patternMatch = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(trimmed)
+    if (patternMatch) {
+      const [, yearStr, monthStr, dayStr] = patternMatch
+      const year = Number(yearStr)
+      const month = Number(monthStr)
+      const day = Number(dayStr)
+      if ([year, month, day].some((part) => Number.isNaN(part))) {
+        return null
+      }
+      date = new Date(year, month - 1, day, 0, 0, 0, 0)
+    } else {
+      date = new Date(trimmed)
+    }
+  } else {
+    const base = value instanceof Date ? new Date(value.getTime()) : new Date(value)
+    if (Number.isNaN(base.getTime())) return null
+    date = base
+  }
+
+  if (!date || Number.isNaN(date.getTime())) return null
+
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 999)
+  } else {
+    date.setHours(0, 0, 0, 0)
+  }
+  return date
+}
+
+const toUtcIso = (value, endOfDay = false) => {
+  const date = toLocalDate(value, endOfDay)
+  if (!date) return ''
+  return date.toISOString()
+}
+
+const getColumnValue = (row, column) => {
+  const rawValue = column.accessor ? column.accessor(row) : row[column.key]
+  const formatted = column.format ? column.format(rawValue, row) : rawValue
+  if (formatted === undefined || formatted === null) return ''
+  return formatted
+}
+
+const buildFilename = (base) => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `${base}-${stamp}`
+}
+
+const generateAdjustmentId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+const exportToExcel = (rows, columns, filenameBase) => {
+  const worksheetData = [columns.map((col) => col.header)]
+  rows.forEach((row) => {
+    worksheetData.push(columns.map((col) => getColumnValue(row, col)))
+  })
+  const worksheet = utils.aoa_to_sheet(worksheetData)
+  const workbook = utils.book_new()
+  utils.book_append_sheet(workbook, worksheet, 'Datos')
+  writeFile(workbook, `${buildFilename(filenameBase)}.xlsx`)
+}
+
+const exportToPdf = (rows, columns, filenameBase, title) => {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt' })
+  doc.setFontSize(14)
+  doc.text(title, 40, 40)
+  autoTable(doc, {
+    startY: 60,
+    head: [columns.map((col) => col.header)],
+    body: rows.map((row) => columns.map((col) => getColumnValue(row, col))),
+    styles: { fontSize: 10, cellPadding: 6 }
+  })
+  doc.save(`${buildFilename(filenameBase)}.pdf`)
+}
+
+const TEXT_LIMITS = {
+  codigoMaterial: 25,
+  nombreMaterial: 60,
+  descripcionMaterial: 140,
+  localizacion: 40,
+  unidadMedida: 10,
+  recibidoDe: 60,
+  entregadoA: 60,
+  observaciones: 220
+}
+
+const QUANTITY_LIMITS = {
+  stock: { min: 0, max: 999999, maxInteger: 6, maxDecimals: 2 },
+  movement: { min: 0.01, max: 999999, maxInteger: 6, maxDecimals: 2 }
+}
+
+const CODE_REGEX = /^[A-Z0-9-]+$/
+const CODE_WITH_SPACES_REGEX = /^[A-Z0-9- ]+$/
+const PLAIN_TEXT_REGEX = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]+$/
+
+const sanitizeCodeInput = (value, maxLength = TEXT_LIMITS.codigoMaterial, options = {}) => {
+  if (!value) return ''
+  const { allowSpaces = false, preserveTrailingSpace = false } = options
+  const regex = allowSpaces ? /[^A-Z0-9-\s]/g : /[^A-Z0-9-]/g
+  const hadTrailingSpace = allowSpaces && preserveTrailingSpace && /\s$/.test(value)
+  let cleaned = value.toUpperCase().replace(regex, '')
+  if (allowSpaces) {
+    cleaned = cleaned.replace(/\s+/g, ' ').trim()
+    if (preserveTrailingSpace && hadTrailingSpace && cleaned.length < maxLength) {
+      cleaned = `${cleaned} `
+    }
+  } else {
+    cleaned = cleaned.trim()
+  }
+  return cleaned.slice(0, maxLength)
+}
+
+const titleCase = (value) => value
+  .split(' ')
+  .filter(Boolean)
+  .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+  .join(' ')
+
+const sanitizePlainText = (value, maxLength, { titleCaseEnabled = false, preserveTrailingSpace = false } = {}) => {
+  if (!value) return ''
+  const hadTrailingSpace = preserveTrailingSpace && /\s$/.test(value)
+  let normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim()
+  if (!PLAIN_TEXT_REGEX.test(normalized)) {
+    normalized = normalized.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]/g, '')
+  }
+  normalized = normalized.slice(0, maxLength)
+  if (titleCaseEnabled && normalized) {
+    normalized = titleCase(normalized)
+  }
+  if (preserveTrailingSpace && hadTrailingSpace && normalized && normalized.length < maxLength) {
+    normalized = `${normalized} `
+  }
+  return normalized
+}
+
+const sanitizeOptionalText = (value, maxLength, options = {}) => {
+  if (!value) return ''
+  return sanitizePlainText(value, maxLength, options)
+}
+
+const sanitizeDecimalInput = (value, limits = QUANTITY_LIMITS.movement) => {
+  if (!value) return ''
+  const cleaned = value.replace(/,/g, '.').replace(/[^\d.]/g, '')
+  if (!cleaned) return ''
+  const [integerPartRaw = '', ...decimalParts] = cleaned.split('.')
+  const integerPart = integerPartRaw.slice(0, limits.maxInteger)
+  const decimals = decimalParts.join('').slice(0, limits.maxDecimals)
+  return decimals ? `${integerPart}.${decimals}` : integerPart
+}
+
+const parseDecimalInput = (value) => {
+  if (value === null || value === undefined) return null
+  if (String(value).trim() === '') return null
+  const numeric = Number(value)
+  if (Number.isNaN(numeric)) return null
+  return Number(numeric.toFixed(2))
+}
+
+const blockInvalidNumberKeys = (event) => {
+  if (['e', 'E', '+', '-'].includes(event.key)) {
+    event.preventDefault()
+  }
+}
+
+const buildRangeMessage = (min, max) => `Ingresa un número entre ${min} y ${max}.`
+
+const validateItemForm = (form) => {
+  const errors = {}
+
+  if (!form.codigoMaterial) {
+    errors.codigoMaterial = 'Este campo no puede quedar vacío.'
+  } else if (!CODE_WITH_SPACES_REGEX.test(form.codigoMaterial)) {
+    errors.codigoMaterial = 'Usa letras, números, guiones o espacios.'
+  }
+
+  if (!form.nombreMaterial) {
+    errors.nombreMaterial = 'Describe la categoría o familia.'
+  }
+
+  if (!form.descripcionMaterial) {
+    errors.descripcionMaterial = 'Este campo es obligatorio.'
+  }
+
+  const stockValue = parseDecimalInput(form.cantidadStock)
+  if (stockValue === null) {
+    errors.cantidadStock = 'Ingresa un número válido.'
+  } else if (stockValue < QUANTITY_LIMITS.stock.min || stockValue > QUANTITY_LIMITS.stock.max) {
+    errors.cantidadStock = buildRangeMessage(QUANTITY_LIMITS.stock.min, QUANTITY_LIMITS.stock.max)
+  }
+
+  if (!form.unidadMedida) {
+    errors.unidadMedida = 'Define la unidad de medida.'
+  } else if (!CODE_REGEX.test(form.unidadMedida)) {
+    errors.unidadMedida = 'Usa únicamente letras y números.'
+  }
+
+  if (!form.localizacion) {
+    errors.localizacion = 'Indica la ubicación.'
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0,
+    quantity: stockValue ?? 0
+  }
+}
+
+const validateRecepcionForm = (form) => {
+  const errors = {}
+  const quantityValue = parseDecimalInput(form.cantidadRecibida)
+
+  if (!form.codigoMaterial) {
+    errors.codigoMaterial = 'Selecciona un item del inventario.'
+  }
+
+  if (!form.recibidoDe) {
+    errors.recibidoDe = 'Indica quién entrega el material.'
+  }
+
+  if (quantityValue === null) {
+    errors.cantidadRecibida = 'Ingresa un número válido.'
+  } else if (quantityValue < QUANTITY_LIMITS.movement.min || quantityValue > QUANTITY_LIMITS.movement.max) {
+    errors.cantidadRecibida = buildRangeMessage(QUANTITY_LIMITS.movement.min, QUANTITY_LIMITS.movement.max)
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0,
+    quantity: quantityValue ?? 0
+  }
+}
+
+const validateEntregaForm = (form, itemsByCodigo) => {
+  const errors = {}
+  const quantityValue = parseDecimalInput(form.cantidadEntregada)
+  const selectedItem = form.codigoMaterial ? itemsByCodigo[form.codigoMaterial] : null
+  const availableStock = selectedItem ? Number(selectedItem.cantidadStock ?? 0) : null
+
+  if (!form.codigoMaterial) {
+    errors.codigoMaterial = 'Selecciona un item con stock.'
+  }
+
+  if (!form.entregadoA) {
+    errors.entregadoA = 'Indica a quién se entrega el material.'
+  }
+
+  if (quantityValue === null) {
+    errors.cantidadEntregada = 'Ingresa un número válido.'
+  } else if (quantityValue < QUANTITY_LIMITS.movement.min || quantityValue > QUANTITY_LIMITS.movement.max) {
+    errors.cantidadEntregada = buildRangeMessage(QUANTITY_LIMITS.movement.min, QUANTITY_LIMITS.movement.max)
+  } else if (availableStock !== null && quantityValue > availableStock) {
+    errors.cantidadEntregada = `Solo hay ${formatDecimal(availableStock)} ${selectedItem?.unidadMedida ?? ''} disponibles.`
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0,
+    quantity: quantityValue ?? 0,
+    availableStock
+  }
+}
+
+const EXPORT_CONFIG = {
+  items: {
+    filename: 'inventario-general',
+    title: 'Inventario General',
+    columns: [
+      { header: '#', key: '__itemIndex' },
+      { header: 'Código material', key: 'codigoMaterial' },
+      { header: 'Categoría', key: 'nombreMaterial' },
+      { header: 'Nombre del item', key: 'descripcionMaterial' },
+      { header: 'Stock', key: 'cantidadStock', format: (value) => formatDecimal(value) },
+      { header: 'Unidad', key: 'unidadMedida' },
+      { header: 'Ubicación', key: 'localizacion' }
+    ]
+  },
+  recepciones: {
+    filename: 'recepciones',
+    title: 'Historial de Recepciones',
+    columns: [
+      { header: '#', key: '__itemIndex' },
+      { header: 'Fecha', accessor: (row) => formatDate(row.fecha) },
+      { header: 'Código material', key: 'codigoMaterial' },
+      { header: 'Categoría', key: 'nombreMaterial' },
+      { header: 'Descripción', key: 'descripcionMaterial' },
+      { header: 'Recibido de', key: 'recibidoDe' },
+      { header: 'Cantidad', key: 'cantidadRecibida', format: (value) => formatDecimal(value) },
+      { header: 'Unidad', key: 'unidadMedida' },
+      { header: 'Observaciones', key: 'observaciones' }
+    ]
+  },
+  entregas: {
+    filename: 'entregas',
+    title: 'Historial de Entregas',
+    columns: [
+      { header: '#', key: '__itemIndex' },
+      { header: 'Fecha', accessor: (row) => formatDate(row.fecha) },
+      { header: 'Código material', key: 'codigoMaterial' },
+      { header: 'Categoría', key: 'nombreMaterial' },
+      { header: 'Descripción', key: 'descripcionMaterial' },
+      { header: 'Entregado a', key: 'entregadoA' },
+      { header: 'Cantidad', key: 'cantidadEntregada', format: (value) => formatDecimal(value) },
+      { header: 'Unidad', key: 'unidadMedida' },
+      { header: 'Observaciones', key: 'observaciones' }
+    ]
+  },
+  kardex: {
+    filename: 'kardex',
+    title: 'Movimientos Kardex',
+    columns: [
+      { header: '#', key: '__itemIndex' },
+      { header: 'Fecha', accessor: (row) => formatDate(row.fecha) },
+      { header: 'Tipo', key: 'tipo' },
+      { header: 'Referencia', key: 'referencia' },
+      { header: 'Descripción', key: 'descripcion' },
+      { header: 'Observación', key: 'observaciones' },
+      { header: 'Cantidad', key: 'cantidad', format: (value) => formatDecimal(value) },
+      { header: 'Unidad', key: 'unidadMedida' }
+    ]
+  },
+  reportes: {
+    filename: 'reporte-mensual',
+    title: 'Reporte de Movimientos',
+    columns: [
+      { header: '#', key: '__itemIndex' },
+      { header: 'Código material', key: 'codigoMaterial' },
+      { header: 'Categoría', key: 'nombreMaterial' },
+      { header: 'Entradas', key: 'totalEntradas', format: (value) => formatDecimal(value) },
+      { header: 'Salidas', key: 'totalSalidas', format: (value) => formatDecimal(value) },
+      {
+        header: 'Entradas S/R',
+        accessor: (row) => formatDecimal(Number(row.totalEntradasSinRegistro) || 0)
+      },
+      {
+        header: 'Salidas S/R',
+        accessor: (row) => formatDecimal(Number(row.totalSalidasSinRegistro) || 0)
+      },
+      {
+        header: 'Balance',
+        accessor: (row) => {
+          const entradas = Number(row.totalEntradas) || 0
+          const salidas = Number(row.totalSalidas) || 0
+          return formatDecimal(entradas - salidas)
+        }
+      },
+      {
+        header: 'Stock después del balance',
+        accessor: (row) => {
+          const stock = Number(row.stockDespuesBalance ?? row.cantidadStock ?? 0)
+          return formatDecimal(stock)
+        }
+      },
+      { header: 'Unidad', key: 'unidadMedida' }
+    ]
+  }
+}
+
+const graphQLRequest = async (query, variables = {}, token) => {
+  const headers = {
+    'Content-Type': 'application/json'
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables })
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message = payload?.errors?.[0]?.message ?? response.statusText ?? 'Error de red'
+    throw new Error(message)
+  }
+  if (payload?.errors?.length) {
+    throw new Error(payload.errors[0]?.message ?? 'Error en la operación')
+  }
+  return payload?.data ?? {}
+}
+
+export default function App() {
+  const now = new Date()
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+  useEffect(() => {
+    document.title = 'Inventario Silo Tres Cruces'
+  }, [])
+  const [token, setToken] = useState(() => localStorage.getItem('inventarioToken') ?? '')
+  const [authUser, setAuthUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(Boolean(token))
+  const [authError, setAuthError] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [lastSync, setLastSync] = useState(null)
+  const [items, setItems] = useState([])
+  const [recepciones, setRecepciones] = useState([])
+  const [entregas, setEntregas] = useState([])
+  const [kardex, setKardex] = useState(null)
+  const [reporte, setReporte] = useState([])
+  const [selectedKardex, setSelectedKardex] = useState('')
+  const [kardexHistory, setKardexHistory] = useState([])
+  const [kardexUsage, setKardexUsage] = useState({})
+  const [kardexRange, setKardexRange] = useState(() => {
+    const fromDate = new Date(now)
+    fromDate.setDate(fromDate.getDate() - 30)
+    return {
+      from: formatDateInput(fromDate),
+      to: formatDateInput(now)
+    }
+  })
+  const [reporteFilter, setReporteFilter] = useState({
+    from: formatDateInput(startOfMonth),
+    to: formatDateInput(now)
+  })
+  const [hideZeroReportRows, setHideZeroReportRows] = useState(false)
+  const [toasts, setToasts] = useState([])
+  const [errorDialog, setErrorDialog] = useState({ open: false, title: '', message: '', hint: '' })
+  const [itemModalState, setItemModalState] = useState({ open: false, mode: 'create', id: '', originalStock: null })
+  const [recepcionModalState, setRecepcionModalState] = useState({ open: false, mode: 'create', id: '' })
+  const [entregaModalState, setEntregaModalState] = useState({ open: false, mode: 'create', id: '' })
+  const [confirmState, setConfirmState] = useState({ open: false, resource: '', id: '', message: '', details: '', payload: null })
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [loading, setLoading] = useState({
+    items: true,
+    recepciones: true,
+    entregas: true,
+    kardex: false,
+    reporte: false
+  })
+  const [saving, setSaving] = useState({
+    item: false,
+    recepcion: false,
+    entrega: false
+  })
+  const [stockAdjustmentPrompt, setStockAdjustmentPrompt] = useState({ open: false, intent: null })
+  const [stockPromptSubmitting, setStockPromptSubmitting] = useState(false)
+  const [manualAdjustments, setManualAdjustments] = useState([])
+
+  const isAuthenticated = Boolean(token)
+
+  const updateLastSync = useCallback((candidate) => {
+    if (!candidate || Number.isNaN(candidate.getTime())) return
+    setLastSync((prev) => {
+      if (!prev || candidate.getTime() > prev.getTime()) {
+        return candidate
+      }
+      return prev
+    })
+  }, [])
+
+  const [itemForm, setItemForm] = useState({
+    codigoMaterial: '',
+    nombreMaterial: '',
+    descripcionMaterial: '',
+    cantidadStock: '',
+    localizacion: '',
+    unidadMedida: ''
+  })
+
+  const [recepcionForm, setRecepcionForm] = useState({
+    recibidoDe: '',
+    codigoMaterial: '',
+    descripcionMaterial: '',
+    cantidadRecibida: '',
+    unidadMedida: '',
+    observaciones: ''
+  })
+
+  const [entregaForm, setEntregaForm] = useState({
+    entregadoA: '',
+    codigoMaterial: '',
+    descripcionMaterial: '',
+    cantidadEntregada: '',
+    unidadMedida: '',
+    observaciones: ''
+  })
+
+  const [itemFormDirty, setItemFormDirty] = useState(false)
+  const [recepcionFormDirty, setRecepcionFormDirty] = useState(false)
+  const [entregaFormDirty, setEntregaFormDirty] = useState(false)
+
+  const resetItemForm = useCallback(() => {
+    setItemForm({
+      codigoMaterial: '',
+      nombreMaterial: '',
+      descripcionMaterial: '',
+      cantidadStock: '',
+      localizacion: '',
+      unidadMedida: ''
+    })
+    setItemFormDirty(false)
+  }, [])
+
+  const resetRecepcionForm = useCallback((overrides = {}) => {
+    setRecepcionForm({
+      recibidoDe: '',
+      codigoMaterial: '',
+      descripcionMaterial: '',
+      cantidadRecibida: '',
+      unidadMedida: '',
+      observaciones: '',
+      ...overrides
+    })
+    setRecepcionFormDirty(false)
+  }, [])
+
+  const resetEntregaForm = useCallback((overrides = {}) => {
+    setEntregaForm({
+      entregadoA: '',
+      codigoMaterial: '',
+      descripcionMaterial: '',
+      cantidadEntregada: '',
+      unidadMedida: '',
+      observaciones: '',
+      ...overrides
+    })
+    setEntregaFormDirty(false)
+  }, [])
+
+  const registerManualAdjustment = useCallback((intent) => {
+    if (!intent?.snapshot) return
+    const entry = {
+      id: generateAdjustmentId(),
+      codigoMaterial: intent.snapshot.codigoMaterial ?? '—',
+      descripcionMaterial: intent.snapshot.descripcionMaterial ?? '',
+      amount: intent.amount ?? 0,
+      type: intent.type === 'entrega' ? 'decrease' : 'increase',
+      timestamp: new Date().toISOString()
+    }
+    setManualAdjustments((prev) => [entry, ...prev].slice(0, 20))
+  }, [])
+
+  const openItemModal = useCallback((mode = 'create', item = null) => {
+    if (mode === 'edit' && item) {
+      setItemForm({
+        codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
+        nombreMaterial: sanitizePlainText(item.nombreMaterial ?? '', TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true }),
+        descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        cantidadStock: sanitizeDecimalInput(String(item.cantidadStock ?? ''), QUANTITY_LIMITS.stock),
+        localizacion: sanitizePlainText(item.localizacion ?? '', TEXT_LIMITS.localizacion),
+        unidadMedida: sanitizeCodeInput(item.unidadMedida ?? '', TEXT_LIMITS.unidadMedida)
+      })
+      setItemModalState({ open: true, mode: 'edit', id: item.id ?? '', originalStock: Number(item.cantidadStock ?? 0) })
+      setItemFormDirty(false)
+    } else {
+      resetItemForm()
+      setItemModalState({ open: true, mode: 'create', id: '', originalStock: null })
+      setItemFormDirty(false)
+    }
+  }, [resetItemForm])
+
+  const closeItemModal = useCallback(() => {
+    setItemModalState({ open: false, mode: 'create', id: '', originalStock: null })
+    resetItemForm()
+  }, [resetItemForm])
+
+  const openRecepcionModal = useCallback((mode = 'create', record = null, overrides = null) => {
+    if (mode === 'edit' && record) {
+      setRecepcionForm({
+        recibidoDe: sanitizePlainText(record.recibidoDe ?? '', TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true }),
+        codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
+        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        cantidadRecibida: sanitizeDecimalInput(String(record.cantidadRecibida ?? '')),
+        unidadMedida: sanitizeCodeInput(record.unidadMedida ?? '', TEXT_LIMITS.unidadMedida),
+        observaciones: sanitizeOptionalText(record.observaciones ?? '', TEXT_LIMITS.observaciones)
+      })
+      setRecepcionModalState({ open: true, mode: 'edit', id: record.id ?? '' })
+      setRecepcionFormDirty(false)
+    } else {
+      resetRecepcionForm(overrides ?? {})
+      setRecepcionModalState({ open: true, mode: 'create', id: '' })
+      setRecepcionFormDirty(false)
+    }
+  }, [resetRecepcionForm])
+
+  const closeRecepcionModal = useCallback(() => {
+    setRecepcionModalState({ open: false, mode: 'create', id: '' })
+    resetRecepcionForm()
+  }, [resetRecepcionForm])
+
+  const openEntregaModal = useCallback((mode = 'create', record = null, overrides = null) => {
+    if (mode === 'edit' && record) {
+      setEntregaForm({
+        entregadoA: sanitizePlainText(record.entregadoA ?? '', TEXT_LIMITS.entregadoA, { titleCaseEnabled: true }),
+        codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
+        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        cantidadEntregada: sanitizeDecimalInput(String(record.cantidadEntregada ?? '')),
+        unidadMedida: sanitizeCodeInput(record.unidadMedida ?? '', TEXT_LIMITS.unidadMedida),
+        observaciones: sanitizeOptionalText(record.observaciones ?? '', TEXT_LIMITS.observaciones)
+      })
+      setEntregaModalState({ open: true, mode: 'edit', id: record.id ?? '' })
+      setEntregaFormDirty(false)
+    } else {
+      resetEntregaForm(overrides ?? {})
+      setEntregaModalState({ open: true, mode: 'create', id: '' })
+      setEntregaFormDirty(false)
+    }
+  }, [resetEntregaForm])
+
+  const closeEntregaModal = useCallback(() => {
+    setEntregaModalState({ open: false, mode: 'create', id: '' })
+    resetEntregaForm()
+  }, [resetEntregaForm])
+
+  const openConfirmDialog = useCallback((resource, entity) => {
+    if (!entity) return
+    const resourceLabels = {
+      item: 'item del inventario',
+      recepcion: 'recepción',
+      entrega: 'entrega'
+    }
+    const title = resourceLabels[resource] ?? 'registro'
+    setConfirmState({
+      open: true,
+      resource,
+      id: entity.id ?? '',
+      message: `¿Estás seguro de que deseas eliminar este ${title}?`,
+      details: 'Esta acción no se puede deshacer y ajustará el stock automáticamente.',
+      payload: entity
+    })
+  }, [])
+
+  const closeConfirmDialog = useCallback(() => {
+    setConfirmState({ open: false, resource: '', id: '', message: '', details: '', payload: null })
+  }, [])
+
+  const authedRequest = useCallback((query, variables = {}) => {
+    if (!token) {
+      throw new Error('Sesión no válida. Vuelve a iniciar sesión.')
+    }
+    return graphQLRequest(query, variables, token)
+  }, [token])
+
+  const buildErrorHint = useCallback((message = '') => {
+    const text = message.toLowerCase()
+    if (text.includes('valid') || text.includes('campo') || text.includes('ingresa')) {
+      return 'Revisa los campos resaltados, completa los obligatorios y asegúrate de respetar los formatos sugeridos.'
+    }
+    if (text.includes('token') || text.includes('sesión')) {
+      return 'Tu sesión puede haber expirado. Vuelve a iniciar sesión y repite la acción.'
+    }
+    if (text.includes('network') || text.includes('fetch') || text.includes('conexión')) {
+      return 'Verifica tu conexión a internet o intenta nuevamente en unos segundos.'
+    }
+    if (text.includes('graphql')) {
+      return 'La API devolvió un error. Intenta refrescar los datos o repite la operación.'
+    }
+    return 'Intenta nuevamente. Si el problema persiste, toma una captura y contacta al administrador del sistema.'
+  }, [])
+
+  const openErrorDialog = useCallback((message, title = 'Necesitamos tu atención') => {
+    if (!message) return
+    setErrorDialog({
+      open: true,
+      title,
+      message,
+      hint: buildErrorHint(message)
+    })
+  }, [buildErrorHint])
+
+  const closeErrorDialog = useCallback(() => {
+    setErrorDialog({ open: false, title: '', message: '', hint: '' })
+  }, [])
+
+  const itemsByCodigo = useMemo(() => {
+    return items.reduce((acc, item) => {
+      if (item?.codigoMaterial) {
+        acc[item.codigoMaterial] = item
+      }
+      return acc
+    }, {})
+  }, [items])
+
+  const itemValidation = useMemo(() => validateItemForm(itemForm), [itemForm])
+  const recepcionValidation = useMemo(() => validateRecepcionForm(recepcionForm), [recepcionForm])
+  const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsByCodigo), [entregaForm, itemsByCodigo])
+
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      const labelA = (a.descripcionMaterial ?? '').toLowerCase()
+      const labelB = (b.descripcionMaterial ?? '').toLowerCase()
+      if (labelA === labelB) return 0
+      return labelA > labelB ? 1 : -1
+    })
+  }, [items])
+
+  const recentKardexItems = useMemo(() => {
+    return kardexHistory
+      .map((code) => itemsByCodigo[code])
+      .filter(Boolean)
+  }, [itemsByCodigo, kardexHistory])
+
+  const topKardexItems = useMemo(() => {
+    const ranked = Object.entries(kardexUsage)
+      .sort(([, countA], [, countB]) => countB - countA)
+      .map(([code]) => itemsByCodigo[code])
+      .filter(Boolean)
+    return ranked.slice(0, 5)
+  }, [itemsByCodigo, kardexUsage])
+
+  const showStatus = useCallback((intent, message) => {
+    if (!message) return
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setToasts((prev) => [...prev, { id, intent, message }])
+    if (intent === 'error') {
+      openErrorDialog(message)
+    }
+    setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id))
+    }, 4500)
+  }, [openErrorDialog])
+
+  const dismissToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id))
+  }, [])
+
+  const handleKardexRangeChange = useCallback((field, value) => {
+    setKardexRange((prev) => ({ ...prev, [field]: value }))
+  }, [])
+
+  const recordKardexSelection = useCallback((itemCode) => {
+    if (!itemCode) return
+    setKardexHistory((prev) => {
+      const filtered = prev.filter((code) => code !== itemCode)
+      return [itemCode, ...filtered].slice(0, 5)
+    })
+    setKardexUsage((prev) => ({
+      ...prev,
+      [itemCode]: (prev[itemCode] ?? 0) + 1
+    }))
+  }, [])
+
+  const handleLogin = useCallback(async ({ usuario, password }) => {
+    setLoginLoading(true)
+    setAuthError('')
+    try {
+      const data = await graphQLRequest(QUERIES.login, { usuario, password })
+      const receivedToken = data?.login
+      if (!receivedToken) {
+        throw new Error('No se pudo obtener el token de acceso')
+      }
+      localStorage.setItem('inventarioToken', receivedToken)
+      setToken(receivedToken)
+      showStatus('success', 'Sesión iniciada correctamente')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo iniciar sesión'
+      setAuthError(message)
+      throw error
+    } finally {
+      setLoginLoading(false)
+    }
+  }, [showStatus])
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('inventarioToken')
+    setToken('')
+    setAuthUser(null)
+    showStatus('success', 'Sesión finalizada')
+  }, [showStatus])
+
+  useEffect(() => {
+    let cancelled = false
+    const bootstrapSession = async () => {
+      if (!token) {
+        setAuthUser(null)
+        setAuthLoading(false)
+        return
+      }
+      setAuthLoading(true)
+      try {
+        const data = await graphQLRequest(QUERIES.perfilActual, {}, token)
+        if (!cancelled) {
+          setAuthUser(data?.perfilActual ?? null)
+          setAuthError('')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Sesión inválida'
+          setAuthError(message)
+          localStorage.removeItem('inventarioToken')
+          setToken('')
+          setAuthUser(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false)
+        }
+      }
+    }
+
+    bootstrapSession()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  const fetchItems = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoading((prev) => ({ ...prev, items: true }))
+    try {
+      const data = await authedRequest(QUERIES.items)
+      setItems(data.items ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, items: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const fetchRecepciones = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoading((prev) => ({ ...prev, recepciones: true }))
+    try {
+      const data = await authedRequest(QUERIES.recepciones)
+      setRecepciones(data.recepciones ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, recepciones: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const fetchEntregas = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoading((prev) => ({ ...prev, entregas: true }))
+    try {
+      const data = await authedRequest(QUERIES.entregas)
+      setEntregas(data.entregas ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, entregas: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const refreshLiveData = useCallback(async () => {
+    await Promise.all([
+      fetchItems(),
+      fetchRecepciones(),
+      fetchEntregas()
+    ])
+  }, [fetchEntregas, fetchItems, fetchRecepciones])
+
+  const fetchReporte = useCallback(async ({ from, to }) => {
+    if (!isAuthenticated) return
+    if (!from || !to) {
+      showStatus('error', 'Selecciona ambas fechas para generar el reporte')
+      return
+    }
+
+    const fromDate = new Date(from)
+    const toDate = new Date(to)
+
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      showStatus('error', 'Formato de fecha inválido')
+      return
+    }
+
+    if (toDate < fromDate) {
+      showStatus('error', 'La fecha "hasta" debe ser mayor o igual a la fecha "desde"')
+      return
+    }
+
+    setLoading((prev) => ({ ...prev, reporte: true }))
+    try {
+      const data = await authedRequest(QUERIES.reporte, {
+        desde: toUtcIso(from),
+        hasta: toUtcIso(to, true)
+      })
+      setReporte(data.reporteMensual ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, reporte: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const handleDeleteConfirmed = useCallback(async () => {
+    if (!confirmState.id) return
+    setDeleteLoading(true)
+    try {
+      if (confirmState.resource === 'item') {
+        await authedRequest(QUERIES.eliminarItem, { id: confirmState.id })
+        showStatus('success', 'Item eliminado')
+        await Promise.all([
+          fetchItems(),
+          fetchReporte(reporteFilter)
+        ])
+      } else if (confirmState.resource === 'recepcion') {
+        await authedRequest(QUERIES.eliminarRecepcion, { id: confirmState.id })
+        showStatus('success', 'Recepción eliminada')
+        await Promise.all([
+          fetchRecepciones(),
+          fetchItems(),
+          fetchReporte(reporteFilter)
+        ])
+      } else if (confirmState.resource === 'entrega') {
+        await authedRequest(QUERIES.eliminarEntrega, { id: confirmState.id })
+        showStatus('success', 'Entrega eliminada')
+        await Promise.all([
+          fetchEntregas(),
+          fetchItems(),
+          fetchReporte(reporteFilter)
+        ])
+      }
+      updateLastSync(new Date())
+      closeConfirmDialog()
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }, [authedRequest, closeConfirmDialog, confirmState.id, confirmState.resource, fetchEntregas, fetchItems, fetchRecepciones, fetchReporte, reporteFilter, showStatus, updateLastSync])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setItems([])
+      setRecepciones([])
+      setEntregas([])
+      setReporte([])
+      setKardex(null)
+      setSelectedKardex('')
+      setKardexHistory([])
+      setKardexUsage({})
+      return
+    }
+    refreshLiveData()
+    const intervalId = setInterval(() => {
+      refreshLiveData()
+    }, 30000)
+    return () => clearInterval(intervalId)
+  }, [isAuthenticated, refreshLiveData])
+
+  useEffect(() => {
+    fetchReporte(reporteFilter)
+  }, [fetchReporte, reporteFilter])
+
+  useEffect(() => {
+    const timestamps = [
+      ...recepciones.map((r) => (r.fecha ? new Date(r.fecha).getTime() : Number.NaN)),
+      ...entregas.map((e) => (e.fecha ? new Date(e.fecha).getTime() : Number.NaN))
+    ].filter((time) => Number.isFinite(time))
+
+    if (timestamps.length === 0) return
+    updateLastSync(new Date(Math.max(...timestamps)))
+  }, [entregas, recepciones, updateLastSync])
+
+  const handleItemFormChange = (field, value) => {
+    const sanitizers = {
+      codigoMaterial: (input) => sanitizeCodeInput(input, TEXT_LIMITS.codigoMaterial, { allowSpaces: true, preserveTrailingSpace: true }),
+      nombreMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true }),
+      descripcionMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.descripcionMaterial, { preserveTrailingSpace: true }),
+      cantidadStock: (input) => sanitizeDecimalInput(input, QUANTITY_LIMITS.stock),
+      localizacion: (input) => sanitizePlainText(input, TEXT_LIMITS.localizacion, { preserveTrailingSpace: true }),
+      unidadMedida: (input) => sanitizeCodeInput(input, TEXT_LIMITS.unidadMedida)
+    }
+    const sanitizer = sanitizers[field] ?? ((input) => input)
+    const sanitizedValue = sanitizer(value)
+    setItemFormDirty(true)
+    setItemForm((prev) => ({ ...prev, [field]: sanitizedValue }))
+  }
+
+  const handleRecepcionChange = (field, value) => {
+    if (field === 'codigoMaterial') {
+      const normalizedCode = sanitizeCodeInput(value, TEXT_LIMITS.codigoMaterial, { allowSpaces: true })
+      const selected = itemsByCodigo[normalizedCode]
+      setRecepcionForm((prev) => ({
+        ...prev,
+        codigoMaterial: normalizedCode,
+        descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
+        unidadMedida: selected ? sanitizeCodeInput(selected.unidadMedida ?? '', TEXT_LIMITS.unidadMedida) : ''
+      }))
+      setRecepcionFormDirty(true)
+      return
+    }
+    const sanitizers = {
+      recibidoDe: (input) => sanitizePlainText(input, TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true, preserveTrailingSpace: true }),
+      cantidadRecibida: (input) => sanitizeDecimalInput(input),
+      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+    }
+    const sanitizer = sanitizers[field] ?? ((input) => input)
+    const sanitizedValue = sanitizer(value)
+    setRecepcionFormDirty(true)
+    setRecepcionForm((prev) => ({ ...prev, [field]: sanitizedValue }))
+  }
+
+  const handleEntregaChange = (field, value) => {
+    if (field === 'codigoMaterial') {
+      const normalizedCode = sanitizeCodeInput(value, TEXT_LIMITS.codigoMaterial, { allowSpaces: true })
+      const selected = itemsByCodigo[normalizedCode]
+      setEntregaForm((prev) => ({
+        ...prev,
+        codigoMaterial: normalizedCode,
+        descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
+        unidadMedida: selected ? sanitizeCodeInput(selected.unidadMedida ?? '', TEXT_LIMITS.unidadMedida) : ''
+      }))
+      setEntregaFormDirty(true)
+      return
+    }
+    const sanitizers = {
+      entregadoA: (input) => sanitizePlainText(input, TEXT_LIMITS.entregadoA, { titleCaseEnabled: true, preserveTrailingSpace: true }),
+      cantidadEntregada: (input) => sanitizeDecimalInput(input),
+      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+    }
+    const sanitizer = sanitizers[field] ?? ((input) => input)
+    const sanitizedValue = sanitizer(value)
+    setEntregaFormDirty(true)
+    setEntregaForm((prev) => ({ ...prev, [field]: sanitizedValue }))
+  }
+
+  const launchMovementFromItem = async (intent) => {
+    if (!intent?.type || !intent?.snapshot) return
+    const base = {
+      codigoMaterial: intent.snapshot.codigoMaterial ?? '',
+      descripcionMaterial: intent.snapshot.descripcionMaterial ?? '',
+      unidadMedida: intent.snapshot.unidadMedida ?? ''
+    }
+    const rawQuantity = intent.quickForm?.cantidad ?? intent.amount
+    const parsedQuantity = parseDecimalInput(rawQuantity)
+    if (parsedQuantity === null || parsedQuantity <= 0) {
+      throw new Error('Define una cantidad válida para registrar el movimiento.')
+    }
+
+    const defaultNote = 'Ajuste de stock registrado desde la edición del item.'
+    const rawNote = intent.quickForm?.observaciones ?? defaultNote
+    const observaciones = sanitizeOptionalText(rawNote, TEXT_LIMITS.observaciones)
+
+    if (intent.type === 'recepcion') {
+      const rawCounterpart = intent.quickForm?.contraparte || 'Ajuste automatizado'
+      const recibidoDe = sanitizePlainText(rawCounterpart, TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true })
+      await authedRequest(QUERIES.crearRecepcion, {
+        input: {
+          ...base,
+          recibidoDe,
+          cantidadRecibida: parsedQuantity,
+          observaciones
+        }
+      })
+      await fetchRecepciones()
+      await fetchReporte(reporteFilter)
+      showStatus('success', 'Recepción registrada automáticamente')
+    } else if (intent.type === 'entrega') {
+      const rawCounterpart = intent.quickForm?.contraparte || 'Ajuste automatizado'
+      const entregadoA = sanitizePlainText(rawCounterpart, TEXT_LIMITS.entregadoA, { titleCaseEnabled: true })
+      await authedRequest(QUERIES.crearEntrega, {
+        input: {
+          ...base,
+          entregadoA,
+          cantidadEntregada: parsedQuantity,
+          observaciones
+        }
+      })
+      await fetchEntregas()
+      await fetchReporte(reporteFilter)
+      showStatus('success', 'Entrega registrada automáticamente')
+    }
+    if (selectedKardex && selectedKardex === base.codigoMaterial) {
+      await fetchKardex(base.codigoMaterial)
+    }
+    updateLastSync(new Date())
+  }
+
+  const submitItem = async (event, options = {}) => {
+    if (event?.preventDefault) {
+      event.preventDefault()
+    }
+    const { force = false, movementIntent = null } = options
+    setItemFormDirty(true)
+    const validation = itemValidation
+    if (!validation.isValid) {
+      showStatus('error', 'Corrige los campos resaltados antes de continuar')
+      return false
+    }
+
+    const isEditMode = itemModalState.mode === 'edit' && Boolean(itemModalState.id)
+    const originalStock = Number.isFinite(itemModalState.originalStock)
+      ? Number(itemModalState.originalStock)
+      : null
+    const stockDelta = isEditMode && originalStock !== null
+      ? Number((validation.quantity - originalStock).toFixed(2))
+      : 0
+    const needsPrompt = isEditMode && !force && Math.abs(stockDelta) >= QUANTITY_LIMITS.movement.min
+
+    if (needsPrompt) {
+      setStockAdjustmentPrompt({
+        open: true,
+        intent: {
+          type: stockDelta < 0 ? 'entrega' : 'recepcion',
+          amount: Number(Math.abs(stockDelta).toFixed(2)),
+          snapshot: {
+            codigoMaterial: itemForm.codigoMaterial,
+            descripcionMaterial: itemForm.descripcionMaterial,
+            unidadMedida: itemForm.unidadMedida
+          },
+          overrideQuantity: originalStock ?? validation.quantity,
+          targetQuantity: validation.quantity
+        }
+      })
+      return false
+    }
+
+    setSaving((prev) => ({ ...prev, item: true }))
+    const payloadQuantity = movementIntent?.overrideQuantity ?? validation.quantity
+    let success = false
+    try {
+      if (isEditMode) {
+        await authedRequest(QUERIES.actualizarItem, {
+          input: {
+            ...itemForm,
+            id: itemModalState.id,
+            cantidadStock: payloadQuantity
+          }
+        })
+        showStatus('success', 'Item actualizado correctamente')
+      } else {
+        await authedRequest(QUERIES.crearItem, {
+          input: {
+            ...itemForm,
+            cantidadStock: validation.quantity
+          }
+        })
+        showStatus('success', 'Item creado correctamente')
+      }
+
+      closeItemModal()
+      await Promise.all([
+        fetchItems(),
+        fetchReporte(reporteFilter)
+      ])
+      updateLastSync(new Date())
+
+      if (movementIntent?.type) {
+        await launchMovementFromItem(movementIntent)
+      }
+      success = true
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setSaving((prev) => ({ ...prev, item: false }))
+    }
+    return success
+  }
+
+  const handleStockPromptSkip = useCallback(async () => {
+    const intentSnapshot = stockAdjustmentPrompt.intent
+    setStockAdjustmentPrompt({ open: false, intent: null })
+    const success = await submitItem(null, { force: true })
+    if (success && intentSnapshot) {
+      registerManualAdjustment(intentSnapshot)
+    }
+  }, [registerManualAdjustment, stockAdjustmentPrompt.intent, submitItem])
+
+  const handleStockPromptCancel = useCallback(() => {
+    setStockAdjustmentPrompt({ open: false, intent: null })
+  }, [])
+
+  const handleStockPromptQuickSubmit = useCallback(async (formData) => {
+    const intent = stockAdjustmentPrompt.intent
+    if (!intent) return
+    const counterpartLimit = intent.type === 'entrega' ? TEXT_LIMITS.entregadoA : TEXT_LIMITS.recibidoDe
+    const enhancedIntent = {
+      ...intent,
+      quickForm: {
+        cantidad: sanitizeDecimalInput(formData.cantidad ?? ''),
+        contraparte: sanitizePlainText(formData.contraparte ?? '', counterpartLimit, { titleCaseEnabled: true, preserveTrailingSpace: true }),
+        observaciones: sanitizeOptionalText(formData.observaciones ?? '', TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+      }
+    }
+    setStockPromptSubmitting(true)
+    try {
+      const success = await submitItem(null, { force: true, movementIntent: enhancedIntent })
+      if (success) {
+        setStockAdjustmentPrompt({ open: false, intent: null })
+      }
+    } finally {
+      setStockPromptSubmitting(false)
+    }
+  }, [stockAdjustmentPrompt.intent, submitItem])
+
+  const submitRecepcion = async (event) => {
+    event.preventDefault()
+    setRecepcionFormDirty(true)
+    const validation = recepcionValidation
+    if (!validation.isValid) {
+      showStatus('error', 'Verifica los datos obligatorios de la recepción')
+      return
+    }
+    setSaving((prev) => ({ ...prev, recepcion: true }))
+    try {
+      if (recepcionModalState.mode === 'edit' && recepcionModalState.id) {
+        await authedRequest(QUERIES.actualizarRecepcion, {
+          input: {
+            ...recepcionForm,
+            id: recepcionModalState.id,
+            cantidadRecibida: validation.quantity
+          }
+        })
+        showStatus('success', 'Recepción actualizada')
+      } else {
+        await authedRequest(QUERIES.crearRecepcion, {
+          input: {
+            ...recepcionForm,
+            cantidadRecibida: validation.quantity
+          }
+        })
+        showStatus('success', 'Recepción registrada')
+      }
+
+      closeRecepcionModal()
+      await Promise.all([
+        fetchRecepciones(),
+        fetchItems(),
+        fetchReporte(reporteFilter)
+      ])
+      updateLastSync(new Date())
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setSaving((prev) => ({ ...prev, recepcion: false }))
+    }
+  }
+
+  const submitEntrega = async (event) => {
+    event.preventDefault()
+    setEntregaFormDirty(true)
+    const validation = entregaValidation
+    if (!validation.isValid) {
+      showStatus('error', 'Confirma que la entrega cumple las validaciones indicadas')
+      return
+    }
+    setSaving((prev) => ({ ...prev, entrega: true }))
+    try {
+      if (entregaModalState.mode === 'edit' && entregaModalState.id) {
+        await authedRequest(QUERIES.actualizarEntrega, {
+          input: {
+            ...entregaForm,
+            id: entregaModalState.id,
+            cantidadEntregada: validation.quantity
+          }
+        })
+        showStatus('success', 'Entrega actualizada')
+      } else {
+        await authedRequest(QUERIES.crearEntrega, {
+          input: {
+            ...entregaForm,
+            cantidadEntregada: validation.quantity
+          }
+        })
+        showStatus('success', 'Entrega registrada')
+      }
+
+      closeEntregaModal()
+      await Promise.all([
+        fetchEntregas(),
+        fetchItems(),
+        fetchReporte(reporteFilter)
+      ])
+      updateLastSync(new Date())
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setSaving((prev) => ({ ...prev, entrega: false }))
+    }
+  }
+
+  const fetchKardex = useCallback(async (codigoMaterial) => {
+    if (!codigoMaterial) return false
+    setLoading((prev) => ({ ...prev, kardex: true }))
+    try {
+      const data = await authedRequest(QUERIES.kardex, { codigoMaterial })
+      setKardex(data.kardexPorCodigoMaterial)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo cargar el kardex'
+      showStatus('error', message)
+      return false
+    } finally {
+      setLoading((prev) => ({ ...prev, kardex: false }))
+    }
+  }, [authedRequest, showStatus])
+
+  const handleSelectKardexItem = useCallback(async (codigoMaterial) => {
+    if (!codigoMaterial) return
+    setSelectedKardex(codigoMaterial)
+    const success = await fetchKardex(codigoMaterial)
+    if (success) {
+      recordKardexSelection(codigoMaterial)
+    }
+  }, [fetchKardex, recordKardexSelection])
+
+  const handleReporteChange = (field, value) => {
+    setReporteFilter((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const rangeLabel = useMemo(() => {
+    const fromDate = reporteFilter.from ? new Date(reporteFilter.from) : null
+    const toDate = reporteFilter.to ? new Date(reporteFilter.to) : null
+    if (!fromDate || !toDate || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      return 'Rango sin definir'
+    }
+    const formatter = new Intl.DateTimeFormat('es-BO', { dateStyle: 'medium' })
+    return `Del ${formatter.format(fromDate)} al ${formatter.format(toDate)}`
+  }, [reporteFilter])
+
+  const filteredReporteRows = useMemo(() => {
+    if (!hideZeroReportRows) return reporte
+    return reporte.filter((row) => {
+      const entradas = Number(row.totalEntradas) || 0
+      const salidas = Number(row.totalSalidas) || 0
+      return entradas !== 0 || salidas !== 0
+    })
+  }, [hideZeroReportRows, reporte])
+
+  const heroIsSyncing = loading.items || loading.recepciones || loading.entregas
+  const headerDisplayName = authUser?.nombre?.trim() || authUser?.nombreUsuario || 'operador'
+
+  const handleExport = useCallback((kind, rows, extra = {}) => {
+    const map = {
+      'items-excel': 'items',
+      'items-pdf': 'items',
+      'recepciones-excel': 'recepciones',
+      'recepciones-pdf': 'recepciones',
+      'entregas-excel': 'entregas',
+      'entregas-pdf': 'entregas',
+      'kardex-excel': 'kardex',
+      'kardex-pdf': 'kardex',
+      'reportes-excel': 'reportes',
+      'reportes-pdf': 'reportes'
+    }
+    const key = map[kind]
+    if (!key) return
+    const config = EXPORT_CONFIG[key]
+    if (!config) return
+    if (!Array.isArray(rows) || rows.length === 0) {
+      showStatus('error', 'No hay datos para exportar')
+      return
+    }
+    const rowsWithIndex = rows.map((row, idx) => ({ __itemIndex: idx + 1, ...row }))
+    const columns = config.columns
+    if (kind.endsWith('excel')) {
+      exportToExcel(rowsWithIndex, columns, config.filename)
+    } else {
+      const title = extra.title ?? config.title
+      exportToPdf(rowsWithIndex, columns, config.filename, title)
+    }
+  }, [showStatus])
+
+  return (
+    <Router>
+      <div className="app-shell">
+        <header className="main-header">
+          <div className="brand-mark">
+            <img src="/logo_inv_cereales.png" alt="Inventario Tres Cruces" className="brand-logo" width="56" height="56" loading="lazy" />
+            <div>
+              <span className="brand-pill">Silo Tres Cruces</span>
+              <p className="brand-title">Inventario inteligente</p>
+              <p className="brand-subtitle">
+                Bienvenido de nuevo, <strong>{headerDisplayName}</strong>.
+              </p>
+            </div>
+          </div>
+          <nav>
+            {isAuthenticated ? (
+              <>
+                <NavLink to="/" end>Inicio</NavLink>
+                <NavLink to="/inventario">Inventario</NavLink>
+                <NavLink to="/recepciones">Recepciones</NavLink>
+                <NavLink to="/entregas">Entregas</NavLink>
+                <NavLink to="/kardex">Kardex</NavLink>
+                <NavLink to="/reportes">Reportes</NavLink>
+                <button className="btn ghost" type="button" onClick={logout}>
+                  Cerrar sesión
+                </button>
+              </>
+            ) : (
+              <NavLink to="/login">Iniciar sesión</NavLink>
+            )}
+          </nav>
+        </header>
+
+        <main>
+          <Routes>
+            <Route
+              path="/login"
+              element={(
+                <LoginPage
+                  onLogin={handleLogin}
+                  loading={loginLoading}
+                  error={authError}
+                  authUser={authUser}
+                />
+              )}
+            />
+            <Route
+              path="/"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <HomePage
+                    lastSync={lastSync}
+                    isSyncing={heroIsSyncing}
+                    authUser={authUser}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/inventario"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <InventoryPage
+                    items={items}
+                    loadingItems={loading.items}
+                    formatDecimal={formatDecimal}
+                    onRequestAdd={() => openItemModal('create')}
+                    onRequestEdit={(item) => openItemModal('edit', item)}
+                    onRequestDelete={(item) => openConfirmDialog('item', item)}
+                    onExport={(type, rows) => handleExport(type, rows ?? items)}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/recepciones"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <RecepcionesPage
+                    recepciones={recepciones}
+                    loadingRecepciones={loading.recepciones}
+                    formatDate={formatDate}
+                    formatDecimal={formatDecimal}
+                    itemsByCodigo={itemsByCodigo}
+                    onRequestAdd={() => openRecepcionModal('create')}
+                    onRequestEdit={(record) => openRecepcionModal('edit', record)}
+                    onRequestDelete={(record) => openConfirmDialog('recepcion', record)}
+                    onExport={(type, rows) => {
+                      const enriched = (rows ?? recepciones).map((row) => ({
+                        ...row,
+                        nombreMaterial: itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
+                      }))
+                      handleExport(type, enriched)
+                    }}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/entregas"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <EntregasPage
+                    entregas={entregas}
+                    loadingEntregas={loading.entregas}
+                    formatDate={formatDate}
+                    formatDecimal={formatDecimal}
+                    itemsByCodigo={itemsByCodigo}
+                    onRequestAdd={() => openEntregaModal('create')}
+                    onRequestEdit={(record) => openEntregaModal('edit', record)}
+                    onRequestDelete={(record) => openConfirmDialog('entrega', record)}
+                    onExport={(type, rows) => {
+                      const enriched = (rows ?? entregas).map((row) => ({
+                        ...row,
+                        nombreMaterial: itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
+                      }))
+                      handleExport(type, enriched)
+                    }}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/kardex"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <KardexPage
+                    items={items}
+                    selectedItem={itemsByCodigo[selectedKardex]}
+                    onSelectItem={handleSelectKardexItem}
+                    loading={loading.kardex}
+                    kardex={kardex}
+                    recentItems={recentKardexItems}
+                    topItems={topKardexItems}
+                    range={kardexRange}
+                    onRangeChange={handleKardexRangeChange}
+                    formatDate={formatDate}
+                    formatDecimal={formatDecimal}
+                    onExport={(type, rows, meta = {}) => {
+                      const selected = itemsByCodigo[selectedKardex]
+                      const dynamicTitle = meta.title ?? selected?.descripcionMaterial ?? kardex?.nombreMaterial ?? 'Kardex'
+                      handleExport(type, rows ?? kardex?.movimientos ?? [], { title: dynamicTitle })
+                    }}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/reportes"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <ReportesPage
+                    reporte={filteredReporteRows}
+                    loading={loading.reporte}
+                    formatDecimal={formatDecimal}
+                    formatDate={formatDate}
+                    filter={reporteFilter}
+                    onFilterChange={handleReporteChange}
+                    onConsult={() => fetchReporte(reporteFilter)}
+                    rangeLabel={rangeLabel}
+                    now={now}
+                    itemsByCodigo={itemsByCodigo}
+                    hideZeroRows={hideZeroReportRows}
+                    onToggleHideZero={(value) => setHideZeroReportRows(value)}
+                    manualAdjustments={manualAdjustments}
+                    onExport={(type, rows) => {
+                      const dataset = rows ?? filteredReporteRows
+                      const enrichedReport = dataset.map((row) => ({
+                        ...row,
+                        descripcionMaterial: itemsByCodigo[row.codigoMaterial]?.descripcionMaterial ?? ''
+                      }))
+                      handleExport(type, enrichedReport, { title: `Reporte ${rangeLabel}` })
+                    }}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="*"
+              element={isAuthenticated ? (
+                <HomePage lastSync={lastSync} isSyncing={heroIsSyncing} authUser={authUser} />
+              ) : (
+                <Navigate to="/login" replace />
+              )}
+            />
+          </Routes>
+        </main>
+
+        <footer>
+          <p>Inventario Tres Cruces · API GraphQL · {now.getFullYear()}</p>
+          <p className="muted">© 2026 Guilherme da Silva | Todos los derechos reservados.</p>
+        </footer>
+
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
+        <StockAdjustmentPrompt
+          prompt={stockAdjustmentPrompt}
+          onSubmitMovement={handleStockPromptQuickSubmit}
+          onSkip={handleStockPromptSkip}
+          onCancel={handleStockPromptCancel}
+          submitting={stockPromptSubmitting}
+          formatDecimal={formatDecimal}
+        />
+
+        <ErrorOverlay dialog={errorDialog} onClose={closeErrorDialog} />
+
+        <FormModal
+          isOpen={itemModalState.open}
+          title={itemModalState.mode === 'edit' ? 'Editar item' : 'Registrar nuevo item'}
+          description="Simplifica el alta o edición de items sin abandonar la tabla."
+          onClose={closeItemModal}
+          onSubmit={submitItem}
+          submitLabel={itemModalState.mode === 'edit' ? 'Guardar cambios' : 'Registrar item'}
+          loading={saving.item}
+          submitDisabled={!itemValidation.isValid}
+        >
+          <div className="form-grid">
+            <label>
+              Código material
+              <input
+                required
+                value={itemForm.codigoMaterial}
+                onChange={(e) => handleItemFormChange('codigoMaterial', e.target.value)}
+                placeholder="Código SAP u otro"
+                maxLength={TEXT_LIMITS.codigoMaterial}
+                autoComplete="off"
+                aria-invalid={itemFormDirty && itemValidation.errors.codigoMaterial ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.codigoMaterial ? 'invalid' : ''}
+              />
+              {itemFormDirty && itemValidation.errors.codigoMaterial && (
+                <p className="field-error">{itemValidation.errors.codigoMaterial}</p>
+              )}
+            </label>
+            <label>
+              Categoría / familia
+              <input
+                required
+                value={itemForm.nombreMaterial}
+                onChange={(e) => handleItemFormChange('nombreMaterial', e.target.value)}
+                placeholder="Clasificación principal"
+                maxLength={TEXT_LIMITS.nombreMaterial}
+                aria-invalid={itemFormDirty && itemValidation.errors.nombreMaterial ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.nombreMaterial ? 'invalid' : ''}
+              />
+              {itemFormDirty && itemValidation.errors.nombreMaterial && (
+                <p className="field-error">{itemValidation.errors.nombreMaterial}</p>
+              )}
+            </label>
+            <label className="full">
+              Descripción del item
+              <textarea
+                required
+                rows={3}
+                value={itemForm.descripcionMaterial}
+                onChange={(e) => handleItemFormChange('descripcionMaterial', e.target.value)}
+                placeholder="Nombre amigable del material"
+                maxLength={TEXT_LIMITS.descripcionMaterial}
+                aria-invalid={itemFormDirty && itemValidation.errors.descripcionMaterial ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.descripcionMaterial ? 'invalid' : ''}
+              />
+              <div className="field-hint-row">
+                <p className="field-hint">Máx. {TEXT_LIMITS.descripcionMaterial} caracteres.</p>
+              </div>
+              {itemFormDirty && itemValidation.errors.descripcionMaterial && (
+                <p className="field-error">{itemValidation.errors.descripcionMaterial}</p>
+              )}
+            </label>
+            <label>
+              Cantidad en stock
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                required
+                value={itemForm.cantidadStock}
+                onChange={(e) => handleItemFormChange('cantidadStock', e.target.value)}
+                placeholder="0"
+                inputMode="decimal"
+                onKeyDown={blockInvalidNumberKeys}
+                max={QUANTITY_LIMITS.stock.max}
+                aria-invalid={itemFormDirty && itemValidation.errors.cantidadStock ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.cantidadStock ? 'invalid' : ''}
+              />
+              {itemFormDirty && itemValidation.errors.cantidadStock && (
+                <p className="field-error">{itemValidation.errors.cantidadStock}</p>
+              )}
+            </label>
+            <label>
+              Unidad de medida
+              <input
+                required
+                value={itemForm.unidadMedida}
+                onChange={(e) => handleItemFormChange('unidadMedida', e.target.value)}
+                placeholder="Kg, Lt, Und, etc."
+                maxLength={TEXT_LIMITS.unidadMedida}
+                aria-invalid={itemFormDirty && itemValidation.errors.unidadMedida ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.unidadMedida ? 'invalid' : ''}
+              />
+              {itemFormDirty && itemValidation.errors.unidadMedida && (
+                <p className="field-error">{itemValidation.errors.unidadMedida}</p>
+              )}
+            </label>
+            <label>
+              Ubicación / máquina
+              <input
+                value={itemForm.localizacion}
+                onChange={(e) => handleItemFormChange('localizacion', e.target.value)}
+                placeholder="Zona donde se almacena"
+                maxLength={TEXT_LIMITS.localizacion}
+                aria-invalid={itemFormDirty && itemValidation.errors.localizacion ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.localizacion ? 'invalid' : ''}
+              />
+              {itemFormDirty && itemValidation.errors.localizacion && (
+                <p className="field-error">{itemValidation.errors.localizacion}</p>
+              )}
+            </label>
+          </div>
+        </FormModal>
+
+        <FormModal
+          isOpen={recepcionModalState.open}
+          title={recepcionModalState.mode === 'edit' ? 'Editar recepción' : 'Registrar recepción'}
+          description="Registra entradas con validación automática del item seleccionado."
+          onClose={closeRecepcionModal}
+          onSubmit={submitRecepcion}
+          submitLabel={recepcionModalState.mode === 'edit' ? 'Guardar cambios' : 'Registrar recepción'}
+          loading={saving.recepcion}
+          submitDisabled={!recepcionValidation.isValid}
+        >
+          <div className="form-grid">
+            <ItemAutocompleteField
+              label="Item"
+              items={sortedItems}
+              value={recepcionForm.codigoMaterial}
+              selectedItem={itemsByCodigo[recepcionForm.codigoMaterial]}
+              onSelect={(code) => handleRecepcionChange('codigoMaterial', code)}
+              dirty={recepcionFormDirty}
+              error={recepcionFormDirty ? recepcionValidation.errors.codigoMaterial : ''}
+              placeholder="Busca por código o nombre"
+              helper={recepcionForm.codigoMaterial
+                ? `Seleccionado: ${itemsByCodigo[recepcionForm.codigoMaterial]?.descripcionMaterial ?? ''}`
+                : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
+              disabled={sortedItems.length === 0}
+            />
+            <label>
+              Recibido de
+              <input
+                required
+                value={recepcionForm.recibidoDe}
+                onChange={(e) => handleRecepcionChange('recibidoDe', e.target.value)}
+                placeholder="Proveedor o responsable"
+                maxLength={TEXT_LIMITS.recibidoDe}
+                autoComplete="off"
+                aria-invalid={recepcionFormDirty && recepcionValidation.errors.recibidoDe ? 'true' : 'false'}
+                className={recepcionFormDirty && recepcionValidation.errors.recibidoDe ? 'invalid' : ''}
+              />
+              {recepcionFormDirty && recepcionValidation.errors.recibidoDe && (
+                <p className="field-error">{recepcionValidation.errors.recibidoDe}</p>
+              )}
+            </label>
+            <label>
+              Código material
+              <input value={recepcionForm.codigoMaterial} readOnly placeholder="Automático" />
+            </label>
+            <label>
+              Unidad de medida
+              <input value={recepcionForm.unidadMedida} readOnly placeholder="Automático" />
+            </label>
+            <label className="full">
+              Nombre del item
+              <input value={recepcionForm.descripcionMaterial} readOnly placeholder="Automático" />
+            </label>
+            <label>
+              Cantidad recibida
+              <input
+                required
+                type="number"
+                step="0.01"
+                min="0"
+                value={recepcionForm.cantidadRecibida}
+                onChange={(e) => handleRecepcionChange('cantidadRecibida', e.target.value)}
+                placeholder="0"
+                inputMode="decimal"
+                onKeyDown={blockInvalidNumberKeys}
+                max={QUANTITY_LIMITS.movement.max}
+                aria-invalid={recepcionFormDirty && recepcionValidation.errors.cantidadRecibida ? 'true' : 'false'}
+                className={recepcionFormDirty && recepcionValidation.errors.cantidadRecibida ? 'invalid' : ''}
+              />
+              {recepcionFormDirty && recepcionValidation.errors.cantidadRecibida && (
+                <p className="field-error">{recepcionValidation.errors.cantidadRecibida}</p>
+              )}
+            </label>
+            <label className="full">
+              Observaciones
+              <textarea
+                rows={3}
+                value={recepcionForm.observaciones}
+                onChange={(e) => handleRecepcionChange('observaciones', e.target.value)}
+                placeholder="Notas adicionales"
+                maxLength={TEXT_LIMITS.observaciones}
+              />
+              <p className="field-hint">Opcional · Máx. {TEXT_LIMITS.observaciones} caracteres.</p>
+            </label>
+          </div>
+        </FormModal>
+
+        <FormModal
+          isOpen={entregaModalState.open}
+          title={entregaModalState.mode === 'edit' ? 'Editar entrega' : 'Registrar entrega'}
+          description="Registra salidas asegurando stock suficiente antes de confirmar."
+          onClose={closeEntregaModal}
+          onSubmit={submitEntrega}
+          submitLabel={entregaModalState.mode === 'edit' ? 'Guardar cambios' : 'Registrar entrega'}
+          loading={saving.entrega}
+          submitDisabled={!entregaValidation.isValid}
+        >
+          <div className="form-grid">
+            <ItemAutocompleteField
+              label="Item"
+              items={sortedItems}
+              value={entregaForm.codigoMaterial}
+              selectedItem={itemsByCodigo[entregaForm.codigoMaterial]}
+              onSelect={(code) => handleEntregaChange('codigoMaterial', code)}
+              dirty={entregaFormDirty}
+              error={entregaFormDirty ? entregaValidation.errors.codigoMaterial : ''}
+              placeholder="Busca por código o nombre"
+              helper={entregaForm.codigoMaterial
+                ? `Seleccionado: ${itemsByCodigo[entregaForm.codigoMaterial]?.descripcionMaterial ?? ''}`
+                : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
+              disabled={sortedItems.length === 0}
+            />
+            <label>
+              Entregado a
+              <input
+                required
+                value={entregaForm.entregadoA}
+                onChange={(e) => handleEntregaChange('entregadoA', e.target.value)}
+                placeholder="Área solicitante"
+                maxLength={TEXT_LIMITS.entregadoA}
+                autoComplete="off"
+                aria-invalid={entregaFormDirty && entregaValidation.errors.entregadoA ? 'true' : 'false'}
+                className={entregaFormDirty && entregaValidation.errors.entregadoA ? 'invalid' : ''}
+              />
+              {entregaFormDirty && entregaValidation.errors.entregadoA && (
+                <p className="field-error">{entregaValidation.errors.entregadoA}</p>
+              )}
+            </label>
+            <label>
+              Código material
+              <input value={entregaForm.codigoMaterial} readOnly placeholder="Automático" />
+            </label>
+            <label>
+              Unidad de medida
+              <input value={entregaForm.unidadMedida} readOnly placeholder="Automático" />
+            </label>
+            <label className="full">
+              Nombre del item
+              <input value={entregaForm.descripcionMaterial} readOnly placeholder="Automático" />
+            </label>
+            <label>
+              Cantidad entregada
+              <input
+                required
+                type="number"
+                step="0.01"
+                min="0"
+                value={entregaForm.cantidadEntregada}
+                onChange={(e) => handleEntregaChange('cantidadEntregada', e.target.value)}
+                placeholder="0"
+                inputMode="decimal"
+                onKeyDown={blockInvalidNumberKeys}
+                max={QUANTITY_LIMITS.movement.max}
+                aria-invalid={entregaFormDirty && entregaValidation.errors.cantidadEntregada ? 'true' : 'false'}
+                className={entregaFormDirty && entregaValidation.errors.cantidadEntregada ? 'invalid' : ''}
+              />
+              {entregaForm.codigoMaterial && (
+                <p className={`field-hint ${entregaFormDirty && entregaValidation.errors.cantidadEntregada ? 'error' : ''}`}>
+                  Stock disponible: {entregaValidation.availableStock !== null
+                    ? `${formatDecimal(entregaValidation.availableStock)} ${itemsByCodigo[entregaForm.codigoMaterial]?.unidadMedida ?? ''}`
+                    : 'Selecciona un item'}
+                </p>
+              )}
+              {entregaFormDirty && entregaValidation.errors.cantidadEntregada && (
+                <p className="field-error">{entregaValidation.errors.cantidadEntregada}</p>
+              )}
+            </label>
+            <label className="full">
+              Observaciones
+              <textarea
+                rows={3}
+                value={entregaForm.observaciones}
+                onChange={(e) => handleEntregaChange('observaciones', e.target.value)}
+                placeholder="Justifica la entrega"
+                maxLength={TEXT_LIMITS.observaciones}
+              />
+              <p className="field-hint">Opcional · Máx. {TEXT_LIMITS.observaciones} caracteres.</p>
+            </label>
+          </div>
+        </FormModal>
+
+        <ConfirmModal
+          isOpen={confirmState.open}
+          title="Confirmar eliminación"
+          message={confirmState.message}
+          details={confirmState.details}
+          onCancel={closeConfirmDialog}
+          onConfirm={handleDeleteConfirmed}
+          loading={deleteLoading}
+        />
+      </div>
+    </Router>
+  )
+}
+
+function ProtectedRoute({ children, isAuthenticated, loading }) {
+  if (loading) {
+    return <div className="loading-state">Verificando sesión…</div>
+  }
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+  return children
+}
+
+function HomePage({ lastSync, isSyncing, authUser }) {
+  const lastSyncLabel = lastSync
+    ? new Intl.DateTimeFormat('es-BO', { dateStyle: 'medium', timeStyle: 'short' }).format(lastSync)
+    : 'Sin registros aún'
+  const displayName = authUser?.nombre?.trim() || authUser?.nombreUsuario || 'operador'
+  const usernameLabel = authUser?.nombreUsuario?.trim() || '—'
+  const heroCopy = authUser
+    ? 'Gestiona existencias, registra movimientos y consulta reportes en segundos.'
+    : 'Visualiza existencias, registra entradas y salidas, genera kardex y reportes mensuales. Todo conectado directamente con la API GraphQL del sistema.'
+
+  return (
+    <>
+      <section className="hero-panel">
+        <div>
+          <p className="eyebrow">Operación sin fricciones</p>
+          <h1>Inventario en tiempo real para el Silo Tres Cruces</h1>
+          {authUser && (
+            <p className="muted">Sesión iniciada como <strong>{usernameLabel}</strong></p>
+          )}
+          <p className="hero-copy">{heroCopy}</p>
+          <div className="hero-actions">
+            <Link className="btn primary" to="/inventario">Ver inventario</Link>
+          </div>
+        </div>
+        <div className="hero-visual">
+          <article className="hero-card compact">
+            <div className="hero-card-heading">
+              <p>Última actualización</p>
+              {isSyncing && <span className="pill">Actualizando…</span>}
+            </div>
+            <h3>{lastSyncLabel}</h3>
+            <p className="muted">Se refresca automáticamente al registrar movimientos.</p>
+          </article>
+          <figure className="hero-logo-card compact">
+            <div className="hero-logo-circle small">
+              <img src="/logo_inv_cereales.png" alt="Logotipo inventario Tres Cruces" loading="lazy" width="120" height="120" />
+            </div>
+            <figcaption>
+              <p className="hero-logo-title">Silo Tres Cruces</p>
+              <p className="hero-logo-note">Monitoreo constante</p>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+    </>
+  )
+}
+
+function LoginPage({ onLogin, loading, error, authUser }) {
+  const [form, setForm] = useState({ usuario: '', password: '' })
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (authUser) {
+      navigate('/', { replace: true })
+    }
+  }, [authUser, navigate])
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    try {
+      await onLogin(form)
+      navigate('/', { replace: true })
+    } catch {
+      // el error ya se muestra desde la prop "error"
+    }
+  }
+
+  return (
+    <section className="login-section">
+      <div className="login-card">
+        <p className="eyebrow">Acceso seguro</p>
+        <h2>Inicia sesión</h2>
+        <p className="muted">Ingresa tus credenciales para acceder al panel.</p>
+        {error && <div className="alert-banner error">{error}</div>}
+        <form onSubmit={handleSubmit} className="login-form">
+          <label>
+            Usuario
+            <input
+              required
+              value={form.usuario}
+              onChange={(e) => setForm((prev) => ({ ...prev, usuario: e.target.value }))}
+            />
+          </label>
+          <label>
+            Contraseña
+            <input
+              required
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+            />
+          </label>
+          <button className="btn primary" type="submit" disabled={loading}>
+            {loading ? 'Validando…' : 'Ingresar'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+function ExportMenu({ onExportExcel, onExportPdf }) {
+  return (
+    <div className="export-menu">
+      <button className="btn outline" type="button" onClick={onExportExcel}>
+        Excel
+      </button>
+      <button className="btn ghost" type="button" onClick={onExportPdf}>
+        PDF
+      </button>
+    </div>
+  )
+}
+
+function InventoryPage({
+  items,
+  loadingItems,
+  formatDecimal,
+  onRequestAdd,
+  onRequestEdit,
+  onRequestDelete,
+  onExport
+}) {
+  const [filters, setFilters] = useState({
+    categoria: 'all',
+    ubicacion: 'all',
+    search: '',
+    codigo: ''
+  })
+  const [page, setPage] = useState(1)
+  const pageSize = 10
+
+  const categorias = useMemo(() => {
+    const valores = items.map((item) => item.nombreMaterial).filter(Boolean)
+    return Array.from(new Set(valores)).sort()
+  }, [items])
+
+  const ubicaciones = useMemo(() => {
+    const valores = items.map((item) => item.localizacion).filter(Boolean)
+    return Array.from(new Set(valores)).sort()
+  }, [items])
+
+  const normalizedSearch = useMemo(() => filters.search.trim().toLowerCase(), [filters.search])
+  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
+  const normalizedCategoria = useMemo(() => (
+    filters.categoria === 'all' ? 'all' : filters.categoria.trim().toLowerCase()
+  ), [filters.categoria])
+  const normalizedUbicacion = useMemo(() => (
+    filters.ubicacion === 'all' ? 'all' : filters.ubicacion.trim().toLowerCase()
+  ), [filters.ubicacion])
+
+  const filteredItems = useMemo(() => {
+    return items.filter((item) => {
+      const categoria = item.nombreMaterial?.trim().toLowerCase() ?? ''
+      const ubicacion = item.localizacion?.trim().toLowerCase() ?? ''
+      const descripcion = item.descripcionMaterial?.toLowerCase() ?? ''
+      const codigoMaterial = item.codigoMaterial?.toLowerCase() ?? ''
+      const matchesCategoria = normalizedCategoria === 'all' || categoria === normalizedCategoria
+      const matchesUbicacion = normalizedUbicacion === 'all' || ubicacion === normalizedUbicacion
+      const matchesSearch = !normalizedSearch || [codigoMaterial, categoria, descripcion].some((value) => value.includes(normalizedSearch))
+      const matchesCodigo = !normalizedCodigo || codigoMaterial.includes(normalizedCodigo)
+      return matchesCategoria && matchesUbicacion && matchesSearch && matchesCodigo
+    })
+  }, [items, normalizedCategoria, normalizedCodigo, normalizedSearch, normalizedUbicacion])
+
+  useEffect(() => {
+    setPage(1)
+  }, [filters])
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize))
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredItems.slice(start, start + pageSize)
+  }, [filteredItems, page, pageSize])
+
+  const hasItems = items.length > 0
+  const showEmptyState = !loadingItems && !hasItems
+  const showNoMatches = !loadingItems && hasItems && filteredItems.length === 0
+
+  const handleFilterChange = (field, value) => {
+    setFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  return (
+    <section className="dashboard-section">
+      <div className="table-header sticky">
+        <div>
+          <p className="eyebrow">Inventario</p>
+          <h2>Control total de items y stock</h2>
+          <p className="muted">{filteredItems.length} ítems visibles</p>
+        </div>
+        <div className="table-header-actions">
+          {loadingItems && <span className="pill">Cargando…</span>}
+          <ExportMenu onExportExcel={() => onExport('items-excel', filteredItems)} onExportPdf={() => onExport('items-pdf', filteredItems)} />
+          <button className="btn primary" type="button" onClick={onRequestAdd}>
+            + Agregar
+          </button>
+        </div>
+      </div>
+
+      <article className="panel-card table-card">
+        <div className="table-search-row">
+          <label className="search-field">
+            Búsqueda rápida
+            <input
+              type="text"
+              value={filters.search}
+              onChange={(e) => handleFilterChange('search', e.target.value)}
+              placeholder="Código material, categoría o nombre"
+            />
+          </label>
+          <label>
+            Código material
+            <input
+              type="text"
+              value={filters.codigo}
+              onChange={(e) => handleFilterChange('codigo', e.target.value)}
+              placeholder="Filtra por código"
+            />
+          </label>
+          <label>
+            Categoría
+            <select value={filters.categoria} onChange={(e) => handleFilterChange('categoria', e.target.value)}>
+              <option value="all">Todas</option>
+              {categorias.map((categoria) => (
+                <option key={categoria} value={categoria}>{categoria}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Ubicación
+            <select value={filters.ubicacion} onChange={(e) => handleFilterChange('ubicacion', e.target.value)}>
+              <option value="all">Cualquiera</option>
+              {ubicaciones.map((ubicacion) => (
+                <option key={ubicacion} value={ubicacion}>{ubicacion}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Código material</th>
+                <th>Categoría</th>
+                <th>Nombre del item</th>
+                <th>Stock</th>
+                <th>Unidad</th>
+                <th>Ubicación</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingItems && (
+                <tr>
+                  <td colSpan={8} className="empty">Cargando tabla…</td>
+                </tr>
+              )}
+              {showEmptyState && (
+                <tr>
+                  <td colSpan={8} className="empty">No hay items registrados</td>
+                </tr>
+              )}
+              {showNoMatches && (
+                <tr>
+                  <td colSpan={8} className="empty">Sin coincidencias para los filtros aplicados</td>
+                </tr>
+              )}
+              {!loadingItems && !showEmptyState && !showNoMatches && paginatedItems.map((item, index) => {
+                const absoluteIndex = filteredItems.findIndex((candidate) => candidate.id === item.id)
+                const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
+                return (
+                  <tr key={item.id ?? `${item.codigoMaterial}-${index}`}>
+                    <td>{rowNumber}</td>
+                    <td>{item.codigoMaterial}</td>
+                    <td>{item.nombreMaterial}</td>
+                    <td className="text-wrap">{item.descripcionMaterial}</td>
+                    <td>{formatDecimal(item.cantidadStock)}</td>
+                    <td>{item.unidadMedida}</td>
+                    <td>{item.localizacion}</td>
+                    <td>
+                      <RowActionsMenu
+                        onEdit={() => onRequestEdit(item)}
+                        onDelete={() => onRequestDelete(item)}
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+      </article>
+    </section>
+  )
+}
+
+function RecepcionesPage({
+  recepciones,
+  loadingRecepciones,
+  formatDate,
+  formatDecimal,
+  itemsByCodigo,
+  onRequestAdd,
+  onRequestEdit,
+  onRequestDelete,
+  onExport
+}) {
+  const [filters, setFilters] = useState({ codigo: '', nombre: '', recibido: '' })
+  const [page, setPage] = useState(1)
+  const pageSize = 10
+
+  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
+  const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
+  const normalizedRecibido = useMemo(() => filters.recibido.trim().toLowerCase(), [filters.recibido])
+
+  const filteredRecepciones = useMemo(() => {
+    return recepciones.filter((recepcion) => {
+      const categoria = itemsByCodigo[recepcion.codigoMaterial]?.nombreMaterial?.toLowerCase() ?? ''
+      const descripcion = recepcion.descripcionMaterial?.toLowerCase() ?? ''
+      const matchesCodigo = !normalizedCodigo || recepcion.codigoMaterial?.toLowerCase().includes(normalizedCodigo)
+      const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
+      const matchesRecibido = !normalizedRecibido || recepcion.recibidoDe?.toLowerCase().includes(normalizedRecibido)
+      return matchesCodigo && matchesNombre && matchesRecibido
+    })
+  }, [itemsByCodigo, normalizedCodigo, normalizedNombre, normalizedRecibido, recepciones])
+
+  useEffect(() => {
+    setPage(1)
+  }, [filters])
+
+  const totalPages = Math.max(1, Math.ceil(filteredRecepciones.length / pageSize))
+  const paginatedRecepciones = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredRecepciones.slice(start, start + pageSize)
+  }, [filteredRecepciones, page, pageSize])
+
+  const hasRecepciones = recepciones.length > 0
+  const showEmptyState = !loadingRecepciones && !hasRecepciones
+  const showNoMatches = !loadingRecepciones && hasRecepciones && filteredRecepciones.length === 0
+
+  const handleFilterChange = (field, value) => {
+    setFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  return (
+    <section className="dashboard-section">
+      <div className="table-header sticky">
+        <div>
+          <p className="eyebrow">Recepciones</p>
+          <h2>Entradas al almacén</h2>
+          <p className="muted">{filteredRecepciones.length} registros</p>
+        </div>
+        <div className="table-header-actions">
+          {loadingRecepciones && <span className="pill">Cargando…</span>}
+          <ExportMenu onExportExcel={() => onExport('recepciones-excel', filteredRecepciones)} onExportPdf={() => onExport('recepciones-pdf', filteredRecepciones)} />
+          <button className="btn primary" type="button" onClick={onRequestAdd}>
+            + Agregar
+          </button>
+        </div>
+      </div>
+
+      <article className="panel-card table-card">
+        <div className="table-search-row">
+          <label>
+            Código material
+            <input
+              type="text"
+              value={filters.codigo}
+              onChange={(e) => handleFilterChange('codigo', e.target.value)}
+              placeholder="Buscar por código"
+            />
+          </label>
+          <label>
+            Material / categoría
+            <input
+              type="text"
+              value={filters.nombre}
+              onChange={(e) => handleFilterChange('nombre', e.target.value)}
+              placeholder="Nombre o categoría"
+            />
+          </label>
+          <label>
+            Recibido de
+            <input
+              type="text"
+              value={filters.recibido}
+              onChange={(e) => handleFilterChange('recibido', e.target.value)}
+              placeholder="Proveedor o persona"
+            />
+          </label>
+        </div>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Fecha</th>
+                <th>Código material</th>
+                <th>Categoría</th>
+                <th>Nombre del item</th>
+                <th>Recibido de</th>
+                <th>Cantidad</th>
+                <th>Unidad</th>
+                <th>Observaciones</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingRecepciones && (
+                <tr>
+                  <td colSpan={10} className="empty">Cargando tabla…</td>
+                </tr>
+              )}
+              {showEmptyState && (
+                <tr>
+                  <td colSpan={10} className="empty">Aún no hay recepciones</td>
+                </tr>
+              )}
+              {showNoMatches && (
+                <tr>
+                  <td colSpan={10} className="empty">Sin coincidencias para los filtros aplicados</td>
+                </tr>
+              )}
+              {!loadingRecepciones && !showEmptyState && !showNoMatches && paginatedRecepciones.map((recepcion, index) => {
+                const categoria = itemsByCodigo[recepcion.codigoMaterial]?.nombreMaterial ?? '—'
+                const absoluteIndex = filteredRecepciones.findIndex((candidate) => candidate.id === recepcion.id)
+                const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
+                return (
+                  <tr key={recepcion.id}>
+                    <td>{rowNumber}</td>
+                    <td>{formatDate(recepcion.fecha)}</td>
+                    <td>{recepcion.codigoMaterial}</td>
+                    <td>{categoria}</td>
+                    <td className="text-wrap">{recepcion.descripcionMaterial}</td>
+                    <td>{recepcion.recibidoDe}</td>
+                    <td>{formatDecimal(recepcion.cantidadRecibida)}</td>
+                    <td>{recepcion.unidadMedida}</td>
+                    <td className="text-wrap">{recepcion.observaciones || '—'}</td>
+                    <td>
+                      <RowActionsMenu
+                        onEdit={() => onRequestEdit(recepcion)}
+                        onDelete={() => onRequestDelete(recepcion)}
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+      </article>
+    </section>
+  )
+}
+
+function EntregasPage({
+  entregas,
+  loadingEntregas,
+  formatDate,
+  formatDecimal,
+  itemsByCodigo,
+  onRequestAdd,
+  onRequestEdit,
+  onRequestDelete,
+  onExport
+}) {
+  const [filters, setFilters] = useState({ codigo: '', nombre: '', entregado: '' })
+  const [page, setPage] = useState(1)
+  const pageSize = 10
+
+  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
+  const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
+  const normalizedEntregado = useMemo(() => filters.entregado.trim().toLowerCase(), [filters.entregado])
+
+  const filteredEntregas = useMemo(() => {
+    return entregas.filter((entrega) => {
+      const categoria = itemsByCodigo[entrega.codigoMaterial]?.nombreMaterial?.toLowerCase() ?? ''
+      const descripcion = entrega.descripcionMaterial?.toLowerCase() ?? ''
+      const matchesCodigo = !normalizedCodigo || entrega.codigoMaterial?.toLowerCase().includes(normalizedCodigo)
+      const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
+      const matchesEntregado = !normalizedEntregado || entrega.entregadoA?.toLowerCase().includes(normalizedEntregado)
+      return matchesCodigo && matchesNombre && matchesEntregado
+    })
+  }, [entregas, itemsByCodigo, normalizedCodigo, normalizedEntregado, normalizedNombre])
+
+  useEffect(() => {
+    setPage(1)
+  }, [filters])
+
+  const totalPages = Math.max(1, Math.ceil(filteredEntregas.length / pageSize))
+  const paginatedEntregas = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredEntregas.slice(start, start + pageSize)
+  }, [filteredEntregas, page, pageSize])
+
+  const hasEntregas = entregas.length > 0
+  const showEmptyState = !loadingEntregas && !hasEntregas
+  const showNoMatches = !loadingEntregas && hasEntregas && filteredEntregas.length === 0
+
+  const handleFilterChange = (field, value) => {
+    setFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  return (
+    <section className="dashboard-section">
+      <div className="table-header sticky">
+        <div>
+          <p className="eyebrow">Entregas</p>
+          <h2>Despachos controlados</h2>
+          <p className="muted">{filteredEntregas.length} registros</p>
+        </div>
+        <div className="table-header-actions">
+          {loadingEntregas && <span className="pill">Cargando…</span>}
+          <ExportMenu onExportExcel={() => onExport('entregas-excel', filteredEntregas)} onExportPdf={() => onExport('entregas-pdf', filteredEntregas)} />
+          <button className="btn primary" type="button" onClick={onRequestAdd}>
+            + Agregar
+          </button>
+        </div>
+      </div>
+
+      <article className="panel-card table-card">
+        <div className="table-search-row">
+          <label>
+            Código material
+            <input
+              type="text"
+              value={filters.codigo}
+              onChange={(e) => handleFilterChange('codigo', e.target.value)}
+              placeholder="Buscar por código"
+            />
+          </label>
+          <label>
+            Material / categoría
+            <input
+              type="text"
+              value={filters.nombre}
+              onChange={(e) => handleFilterChange('nombre', e.target.value)}
+              placeholder="Nombre o categoría"
+            />
+          </label>
+          <label>
+            Entregado a
+            <input
+              type="text"
+              value={filters.entregado}
+              onChange={(e) => handleFilterChange('entregado', e.target.value)}
+              placeholder="Área solicitante"
+            />
+          </label>
+        </div>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Fecha</th>
+                <th>Código material</th>
+                <th>Categoría</th>
+                <th>Nombre del item</th>
+                <th>Entregado a</th>
+                <th>Cantidad</th>
+                <th>Unidad</th>
+                <th>Observaciones</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingEntregas && (
+                <tr>
+                  <td colSpan={10} className="empty">Cargando tabla…</td>
+                </tr>
+              )}
+              {showEmptyState && (
+                <tr>
+                  <td colSpan={10} className="empty">Aún no hay entregas</td>
+                </tr>
+              )}
+              {showNoMatches && (
+                <tr>
+                  <td colSpan={10} className="empty">Sin coincidencias para los filtros aplicados</td>
+                </tr>
+              )}
+              {!loadingEntregas && !showEmptyState && !showNoMatches && paginatedEntregas.map((entrega, index) => {
+                const categoria = itemsByCodigo[entrega.codigoMaterial]?.nombreMaterial ?? '—'
+                const absoluteIndex = filteredEntregas.findIndex((candidate) => candidate.id === entrega.id)
+                const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
+                return (
+                  <tr key={entrega.id}>
+                    <td>{rowNumber}</td>
+                    <td>{formatDate(entrega.fecha)}</td>
+                    <td>{entrega.codigoMaterial}</td>
+                    <td>{categoria}</td>
+                    <td className="text-wrap">{entrega.descripcionMaterial}</td>
+                    <td>{entrega.entregadoA}</td>
+                    <td>{formatDecimal(entrega.cantidadEntregada)}</td>
+                    <td>{entrega.unidadMedida}</td>
+                    <td className="text-wrap">{entrega.observaciones || '—'}</td>
+                    <td>
+                      <RowActionsMenu
+                        onEdit={() => onRequestEdit(entrega)}
+                        onDelete={() => onRequestDelete(entrega)}
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+      </article>
+    </section>
+  )
+}
+
+function ItemAutocompleteField({
+  label = 'Item',
+  items = [],
+  value = '',
+  selectedItem = null,
+  onSelect,
+  dirty = false,
+  error = '',
+  placeholder = 'Busca por código o nombre',
+  helper,
+  disabled = false,
+  full = false
+}) {
+  const inputId = useId()
+  const listboxId = `${inputId}-list`
+  const optionIdPrefix = `${listboxId}-option-`
+  const containerRef = useRef(null)
+  const listRef = useRef(null)
+  const inputRef = useRef(null)
+  const [query, setQuery] = useState('')
+  const [manualQuery, setManualQuery] = useState(false)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
+
+  const normalizedQuery = query.trim().toLowerCase()
+
+  const suggestions = useMemo(() => {
+    if (!items.length) return []
+    if (!normalizedQuery) {
+      return items.slice(0, 8)
+    }
+    return items
+      .filter((item) => {
+        const haystack = `${item.codigoMaterial ?? ''} ${item.descripcionMaterial ?? ''} ${item.nombreMaterial ?? ''}`.toLowerCase()
+        return haystack.includes(normalizedQuery)
+      })
+      .slice(0, 8)
+  }, [items, normalizedQuery])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    const handleClickOutside = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setDropdownOpen(false)
+        setActiveIndex(-1)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  useEffect(() => {
+    if (!value) {
+      if (!manualQuery) {
+        setQuery('')
+      }
+      return
+    }
+    const match = items.find((item) => item.codigoMaterial === value)
+    if (match) {
+      setManualQuery(false)
+      setQuery(`${match.codigoMaterial} · ${match.descripcionMaterial}`)
+    }
+  }, [items, manualQuery, value])
+
+  useEffect(() => {
+    if (activeIndex < 0) return
+    const option = listRef.current?.querySelector(`[data-index="${activeIndex}"]`)
+    if (option) {
+      option.scrollIntoView({ block: 'nearest' })
+    }
+  }, [activeIndex])
+
+  const handleInputChange = (event) => {
+    setManualQuery(true)
+    setQuery(event.target.value)
+    setDropdownOpen(true)
+    setActiveIndex(-1)
+  }
+
+  const handleSelectItem = (item) => {
+    if (!item) return
+    onSelect?.(item.codigoMaterial)
+    setManualQuery(false)
+    setQuery(`${item.codigoMaterial} · ${item.descripcionMaterial}`)
+    setDropdownOpen(false)
+    setActiveIndex(-1)
+  }
+
+  const handleInputBlur = (event) => {
+    if (!containerRef.current?.contains(event.relatedTarget)) {
+      setDropdownOpen(false)
+      setActiveIndex(-1)
+    }
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setDropdownOpen(true)
+      setActiveIndex((prev) => {
+        const nextIndex = prev + 1
+        return nextIndex >= suggestions.length ? suggestions.length - 1 : nextIndex
+      })
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((prev) => {
+        const nextIndex = prev - 1
+        return nextIndex < 0 ? -1 : nextIndex
+      })
+      return
+    }
+    if (event.key === 'Enter') {
+      if (activeIndex >= 0 && suggestions[activeIndex]) {
+        event.preventDefault()
+        handleSelectItem(suggestions[activeIndex])
+        return
+      }
+      if (suggestions.length === 1) {
+        event.preventDefault()
+        handleSelectItem(suggestions[0])
+        return
+      }
+      const exact = items.find((item) => (item.codigoMaterial ?? '').toLowerCase() === normalizedQuery)
+      if (exact) {
+        event.preventDefault()
+        handleSelectItem(exact)
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      setDropdownOpen(false)
+      setActiveIndex(-1)
+    }
+  }
+
+  const handleClear = () => {
+    setQuery('')
+    setManualQuery(false)
+    setDropdownOpen(false)
+    setActiveIndex(-1)
+    onSelect?.('')
+  }
+
+  const helperMessage = helper ?? (selectedItem
+    ? `Stock actual: ${formatDecimal(Number(selectedItem.cantidadStock) || 0)} ${selectedItem.unidadMedida ?? ''}`
+    : 'Escribe para ver sugerencias y confirma con Enter.')
+  const showDropdown = dropdownOpen && !disabled
+  const showError = dirty && Boolean(error)
+  const rootClass = ['form-field', 'autocomplete-field', full ? 'full' : ''].filter(Boolean).join(' ')
+
+  const emptyMessage = items.length === 0
+    ? 'No hay ítems disponibles aún.'
+    : 'Sin coincidencias para la búsqueda actual.'
+
+  return (
+    <div className={rootClass} ref={containerRef}>
+      <label htmlFor={inputId}>
+        {label}
+        <div className="autocomplete-input-wrapper">
+          <input
+            id={inputId}
+            type="text"
+            value={query}
+            placeholder={placeholder}
+            onChange={handleInputChange}
+            onFocus={() => !disabled && setDropdownOpen(true)}
+            onBlur={handleInputBlur}
+            onKeyDown={handleKeyDown}
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={showDropdown}
+            aria-controls={listboxId}
+            aria-activedescendant={activeIndex >= 0 ? `${optionIdPrefix}${activeIndex}` : undefined}
+            aria-invalid={showError ? 'true' : 'false'}
+            disabled={disabled}
+            ref={inputRef}
+          />
+          {(query || value) && !disabled && (
+            <button
+              type="button"
+              className="autocomplete-clear"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleClear}
+              aria-label="Limpiar selección"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </label>
+      {showError && <p className="field-error">{error}</p>}
+      {!showError && helperMessage && (
+        <p className="field-hint">{helperMessage}</p>
+      )}
+      {showDropdown && (
+        <div className="autocomplete-panel">
+          {suggestions.length === 0 ? (
+            <p className="autocomplete-empty">{emptyMessage}</p>
+          ) : (
+            <ul role="listbox" id={listboxId} ref={listRef}>
+              {suggestions.map((item, index) => (
+                <li key={item.id ?? item.codigoMaterial ?? index}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    data-index={index}
+                    id={`${optionIdPrefix}${index}`}
+                    className={index === activeIndex ? 'active' : ''}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleSelectItem(item)}
+                  >
+                    <span className="suggestion-code">{item.codigoMaterial}</span>
+                    <span className="suggestion-body">
+                      {item.descripcionMaterial}
+                      <small>{item.nombreMaterial}</small>
+                    </span>
+                    <span className="suggestion-meta">Stock: {formatDecimal(item.cantidadStock)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KardexPage({
+  items,
+  selectedItem,
+  kardex,
+  loading,
+  formatDate,
+  formatDecimal,
+  onSelectItem,
+  onExport,
+  recentItems = [],
+  topItems = [],
+  range,
+  onRangeChange
+}) {
+  const [searchTerm, setSearchTerm] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [machineFilter, setMachineFilter] = useState('all')
+  const [onlyStock, setOnlyStock] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
+  const suggestionListRef = useRef(null)
+
+  const normalizedSearch = searchTerm.trim().toLowerCase()
+  const normalizedCategory = categoryFilter === 'all' ? 'all' : categoryFilter.trim().toLowerCase()
+  const normalizedMachine = machineFilter === 'all' ? 'all' : machineFilter.trim().toLowerCase()
+
+  const categories = useMemo(() => {
+    const unique = items.map((item) => item.nombreMaterial).filter(Boolean)
+    return Array.from(new Set(unique)).sort()
+  }, [items])
+
+  const machines = useMemo(() => {
+    const unique = items.map((item) => item.localizacion).filter(Boolean)
+    return Array.from(new Set(unique)).sort()
+  }, [items])
+
+  const filteredUniverse = useMemo(() => {
+    return items.filter((item) => {
+      const codigo = item.codigoMaterial?.toLowerCase() ?? ''
+      const descripcion = item.descripcionMaterial?.toLowerCase() ?? ''
+      const categoria = item.nombreMaterial?.toLowerCase() ?? ''
+      const ubicacion = item.localizacion?.toLowerCase() ?? ''
+      const haystack = `${codigo} ${descripcion} ${categoria}`
+      const matchesSearch = !normalizedSearch || haystack.includes(normalizedSearch)
+      const matchesCategory = normalizedCategory === 'all' || categoria === normalizedCategory
+      const matchesMachine = normalizedMachine === 'all' || ubicacion === normalizedMachine
+      const matchesStock = !onlyStock || (Number(item.cantidadStock) || 0) > 0
+      return matchesSearch && matchesCategory && matchesMachine && matchesStock
+    })
+  }, [items, normalizedCategory, normalizedMachine, normalizedSearch, onlyStock])
+
+  const suggestions = useMemo(() => filteredUniverse.slice(0, 8), [filteredUniverse])
+
+  useEffect(() => {
+    setActiveIndex(-1)
+  }, [searchTerm, categoryFilter, machineFilter, onlyStock])
+
+  useEffect(() => {
+    if (!suggestionListRef.current) return
+    if (activeIndex < 0) return
+    const element = suggestionListRef.current.querySelector(`[data-index="${activeIndex}"]`)
+    if (element) {
+      element.scrollIntoView({ block: 'nearest' })
+    }
+  }, [activeIndex])
+
+  const handleSuggestionSelect = (item) => {
+    setSearchTerm(item.codigoMaterial ?? item.descripcionMaterial ?? '')
+    onSelectItem?.(item.codigoMaterial)
+  }
+
+  const handleSearchKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActiveIndex((prev) => (prev + 1 >= suggestions.length ? suggestions.length - 1 : prev + 1))
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((prev) => (prev - 1 < 0 ? -1 : prev - 1))
+      return
+    }
+    if (event.key === 'Enter') {
+      if (activeIndex >= 0 && suggestions[activeIndex]) {
+        event.preventDefault()
+        handleSuggestionSelect(suggestions[activeIndex])
+      } else if (suggestions.length === 1) {
+        event.preventDefault()
+        handleSuggestionSelect(suggestions[0])
+      }
+    }
+  }
+
+  const rangeFrom = range?.from ?? ''
+  const rangeTo = range?.to ?? ''
+
+  const filteredMovements = useMemo(() => {
+    if (!kardex?.movimientos) return []
+    const fromDate = rangeFrom ? toLocalDate(rangeFrom) : null
+    const toDate = rangeTo ? toLocalDate(rangeTo, true) : null
+    return kardex.movimientos.filter((mov) => {
+      if (!mov.fecha) return true
+      const current = new Date(mov.fecha)
+      if (Number.isNaN(current.getTime())) return true
+      if (fromDate && current < fromDate) return false
+      if (toDate && current > toDate) return false
+      return true
+    })
+  }, [kardex, rangeFrom, rangeTo])
+
+  const handleRangeChangeInternal = (field, value) => {
+    onRangeChange?.(field, value)
+  }
+
+  const recentList = recentItems.filter(Boolean).slice(0, 4)
+  const popularList = topItems.filter(Boolean).slice(0, 4)
+  const summaryItem = selectedItem ?? (kardex ? {
+    descripcionMaterial: kardex.nombreMaterial,
+    nombreMaterial: kardex.nombreMaterial,
+    codigoMaterial: kardex.codigoMaterial ?? '',
+    unidadMedida: kardex.movimientos?.[0]?.unidadMedida ?? '',
+    localizacion: ''
+  } : null)
+  const hasSelection = Boolean(kardex && summaryItem)
+  const exportTitle = summaryItem?.descripcionMaterial ?? kardex?.nombreMaterial ?? 'Kardex'
+  const placeholderMessage = items.length === 0
+    ? 'Carga algunos ítems en el inventario para comenzar.'
+    : 'Selecciona un ítem para visualizar sus movimientos.'
+
+  return (
+    <section className="dashboard-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Kardex</p>
+          <h2>Consulta inteligente de movimientos</h2>
+          <p className="muted">Busca por nombre, código material o categoría y aplica filtros rápidos antes de cargar el kardex.</p>
+        </div>
+      </div>
+
+      <article className="panel-card">
+        <div className="panel-header">
+          <div>
+            <h3>Buscador avanzado</h3>
+            <p className="muted">Autocompletado limitado a resultados relevantes y listo para teclado.</p>
+          </div>
+        </div>
+        <div className="kardex-search-grid">
+          <label className="search-field full">
+            Item
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Escribe código material, categoría o nombre"
+            />
+          </label>
+          <label>
+            Categoría
+            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+              <option value="all">Todas</option>
+              {categories.map((categoria) => (
+                <option key={categoria} value={categoria}>{categoria}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Localización
+            <select value={machineFilter} onChange={(e) => setMachineFilter(e.target.value)}>
+              <option value="all">Cualquiera</option>
+              {machines.map((machine) => (
+                <option key={machine} value={machine}>{machine}</option>
+              ))}
+            </select>
+          </label>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={onlyStock}
+              onChange={(e) => setOnlyStock(e.target.checked)}
+            />
+            Solo ítems con stock
+          </label>
+        </div>
+        <div className="kardex-suggestions enhanced">
+          {suggestions.length === 0 ? (
+            <p className="kardex-suggestions-empty">
+              {normalizedSearch ? 'Sin coincidencias para el criterio actual.' : 'Refina la búsqueda para ver sugerencias.'}
+            </p>
+          ) : (
+            <ul ref={suggestionListRef}>
+              {suggestions.map((item, index) => (
+                <li key={item.id ?? item.codigoMaterial ?? index}>
+                  <button
+                    type="button"
+                    data-index={index}
+                    className={index === activeIndex ? 'active' : ''}
+                    onClick={() => handleSuggestionSelect(item)}
+                  >
+                    <span className="suggestion-code">{item.codigoMaterial}</span>
+                    <span className="suggestion-body">
+                      {item.descripcionMaterial}
+                      <small>{item.nombreMaterial}</small>
+                    </span>
+                    <span className="suggestion-meta">Stock: {formatDecimal(item.cantidadStock)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </article>
+
+      <div className="kardex-meta-panels">
+        <article className="panel-card compact">
+          <div className="panel-header">
+            <h3>Últimos ítems consultados</h3>
+          </div>
+          {recentList.length === 0 ? (
+            <p className="muted">Aún no hay historial.</p>
+          ) : (
+            <div className="chip-grid">
+              {recentList.map((item) => (
+                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item.codigoMaterial)}>
+                  <span className="chip-title">{item.descripcionMaterial}</span>
+                  <small>{item.nombreMaterial}</small>
+                </button>
+              ))}
+            </div>
+          )}
+        </article>
+        <article className="panel-card compact">
+          <div className="panel-header">
+            <h3>Ítems más usados</h3>
+          </div>
+          {popularList.length === 0 ? (
+            <p className="muted">Consulta algunos ítems para desbloquear recomendaciones.</p>
+          ) : (
+            <div className="chip-grid">
+              {popularList.map((item) => (
+                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item.codigoMaterial)}>
+                  <span className="chip-title">{item.descripcionMaterial}</span>
+                  <small>{item.nombreMaterial}</small>
+                </button>
+              ))}
+            </div>
+          )}
+        </article>
+      </div>
+
+      {hasSelection ? (
+        <>
+          <div className="kardex-summary-grid">
+            <article className="panel-card highlight">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Resumen del ítem</p>
+                  <h3>{summaryItem.descripcionMaterial}</h3>
+                </div>
+                {loading && <span className="pill">Cargando…</span>}
+              </div>
+              <div className="summary-grid">
+                <div>
+                  <p className="muted">Código material</p>
+                  <p className="summary-value">{summaryItem.codigoMaterial || '—'}</p>
+                </div>
+                <div>
+                  <p className="muted">Categoría</p>
+                  <p className="summary-value">{summaryItem.nombreMaterial}</p>
+                </div>
+                <div>
+                  <p className="muted">Stock actual</p>
+                  <p className="summary-value">{formatDecimal(kardex.stockActual)} {summaryItem.unidadMedida}</p>
+                </div>
+                <div>
+                  <p className="muted">Ubicación</p>
+                  <p className="summary-value">{summaryItem.localizacion || '—'}</p>
+                </div>
+              </div>
+            </article>
+            <article className="panel-card compact">
+              <div className="panel-header">
+                <h3>Filtra por fechas</h3>
+              </div>
+              <div className="kardex-range">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={rangeFrom}
+                    max={rangeTo || undefined}
+                    onChange={(e) => handleRangeChangeInternal('from', e.target.value)}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={rangeTo}
+                    min={rangeFrom || undefined}
+                    onChange={(e) => handleRangeChangeInternal('to', e.target.value)}
+                  />
+                </label>
+              </div>
+            </article>
+          </div>
+
+          <article className="panel-card table-card">
+            <div className="panel-header">
+              <div>
+                <h3>Movimientos del kardex</h3>
+                <p className="muted">Entradas y salidas filtradas por el rango seleccionado.</p>
+              </div>
+              <div className="panel-actions">
+                <ExportMenu
+                  onExportExcel={() => onExport?.('kardex-excel', filteredMovements, { title: exportTitle })}
+                  onExportPdf={() => onExport?.('kardex-pdf', filteredMovements, { title: exportTitle })}
+                />
+              </div>
+            </div>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Referencia / Responsable</th>
+                    <th>Descripción</th>
+                    <th>Observaciones</th>
+                    <th>Cantidad</th>
+                    <th>Unidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredMovements.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="empty">Sin movimientos para el rango seleccionado.</td>
+                    </tr>
+                  ) : (
+                    filteredMovements.map((mov, index) => (
+                      <tr key={`${mov.fecha}-${index}`}>
+                        <td>{formatDate(mov.fecha)}</td>
+                        <td>
+                          <span className={`pill ${mov.tipo === 'ENTRADA' ? 'success' : 'warning'}`}>
+                            {mov.tipo}
+                          </span>
+                        </td>
+                        <td className="text-wrap">{mov.referencia || '—'}</td>
+                        <td className="text-wrap">{mov.descripcion}</td>
+                        <td className="text-wrap">{mov.observaciones || '—'}</td>
+                        <td>{formatDecimal(mov.cantidad)}</td>
+                        <td>{mov.unidadMedida}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </>
+      ) : (
+        <article className="panel-card empty-state">
+          <div className="panel-header">
+            <h3>Sin ítem seleccionado</h3>
+          </div>
+          <p className="muted">{placeholderMessage}</p>
+        </article>
+      )}
+    </section>
+  )
+}
+
+function ReportesPage({
+  reporte,
+  loading,
+  formatDecimal,
+  formatDate,
+  filter,
+  onFilterChange,
+  onConsult,
+  rangeLabel,
+  now,
+  itemsByCodigo,
+  hideZeroRows,
+  onToggleHideZero,
+  onExport,
+  manualAdjustments = []
+}) {
+  const rows = Array.isArray(reporte) ? reporte : []
+  const resolvedRows = useMemo(() => {
+    return rows.map((row) => {
+      const codeKey = row.codigoMaterial ?? ''
+      const linkedItem = codeKey ? itemsByCodigo?.[codeKey] ?? null : null
+      return {
+        ...row,
+        codigoMaterial: linkedItem?.codigoMaterial ?? row.codigoMaterial ?? '—',
+        nombreMaterial: linkedItem?.nombreMaterial ?? row.nombreMaterial ?? '—',
+        descripcionMaterial: linkedItem?.descripcionMaterial ?? row.descripcionMaterial ?? '—',
+        stockDespuesBalance: Number(row.stockDespuesBalance ?? linkedItem?.cantidadStock ?? 0),
+        totalEntradasSinRegistro: Number(row.totalEntradasSinRegistro) || 0,
+        totalSalidasSinRegistro: Number(row.totalSalidasSinRegistro) || 0
+      }
+    })
+  }, [itemsByCodigo, rows])
+  const formatAdjustmentDate = (value) => {
+    if (!value) return '—'
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return '—'
+    const datePart = formatDate ? formatDate(parsed) : new Intl.DateTimeFormat('es-BO', { dateStyle: 'medium' }).format(parsed)
+    const timePart = new Intl.DateTimeFormat('es-BO', { hour: '2-digit', minute: '2-digit' }).format(parsed)
+    return `${datePart} · ${timePart}`
+  }
+
+  const formatAdjustmentAmount = (type, amount) => {
+    const numeric = Number(amount) || 0
+    const formatted = formatDecimal ? formatDecimal(Math.abs(numeric)) : Math.abs(numeric).toFixed(2)
+    return `${type === 'decrease' ? '-' : '+'}${formatted}`
+  }
+
+  return (
+    <section className="dashboard-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Reportes</p>
+          <h2>Resumen por rango</h2>
+          <p className="muted">Define un intervalo personalizado para conocer los movimientos acumulados.</p>
+        </div>
+        <div className="report-filters">
+          <label>
+            Desde
+            <input
+              type="date"
+              value={filter.from}
+              max={filter.to || formatDateInput(now)}
+              onChange={(e) => onFilterChange('from', e.target.value)}
+            />
+          </label>
+          <label>
+            Hasta
+            <input
+              type="date"
+              value={filter.to}
+              min={filter.from || ''}
+              max={formatDateInput(now)}
+              onChange={(e) => onFilterChange('to', e.target.value)}
+            />
+          </label>
+          <button className="btn outline" type="button" onClick={onConsult}>
+            Consultar
+          </button>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={hideZeroRows}
+              onChange={(e) => onToggleHideZero?.(e.target.checked)}
+            />
+            Ocultar filas sin movimiento
+          </label>
+        </div>
+      </div>
+
+      <article className="panel-card table-card">
+        <div className="panel-header">
+          <div>
+            <h3>{rangeLabel}</h3>
+            <p className="muted">Totales por unidad de medida</p>
+          </div>
+          <div className="panel-actions">
+            {loading && <span className="pill">Cargando…</span>}
+            <ExportMenu
+              onExportExcel={() => onExport('reportes-excel', resolvedRows)}
+              onExportPdf={() => onExport('reportes-pdf', resolvedRows)}
+            />
+          </div>
+        </div>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Código material</th>
+                <th>Nombre del item</th>
+                <th>Categoría</th>
+                <th>Entradas</th>
+                <th>Salidas</th>
+                <th>Balance</th>
+                <th className="text-center">Stock después del balance</th>
+                <th>Unidad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resolvedRows.length === 0 && !loading && (
+                <tr>
+                  <td colSpan={8} className="empty">Sin datos para el periodo seleccionado</td>
+                </tr>
+              )}
+              {resolvedRows.map((row) => {
+                const totalEntradas = Number(row.totalEntradas) || 0
+                const totalSalidas = Number(row.totalSalidas) || 0
+                const totalEntradasSr = Number(row.totalEntradasSinRegistro) || 0
+                const totalSalidasSr = Number(row.totalSalidasSinRegistro) || 0
+                const balance = totalEntradas - totalSalidas
+                const stockDespues = Number(row.stockDespuesBalance) || 0
+                return (
+                  <tr key={row.codigoMaterial ?? row.id ?? row.descripcionMaterial}>
+                    <td className="cell-code">{row.codigoMaterial}</td>
+                    <td className="text-wrap">{row.descripcionMaterial ?? '—'}</td>
+                    <td>{row.nombreMaterial ?? '—'}</td>
+                    <td>
+                      <span>{formatDecimal(totalEntradas)}</span>
+                      {totalEntradasSr > 0 && (
+                        <span className="metric-note muted">+{formatDecimal(totalEntradasSr)} S/R</span>
+                      )}
+                    </td>
+                    <td>
+                      <span>{formatDecimal(totalSalidas)}</span>
+                      {totalSalidasSr > 0 && (
+                        <span className="metric-note muted">-{formatDecimal(totalSalidasSr)} S/R</span>
+                      )}
+                    </td>
+                    <td>{formatDecimal(balance)}</td>
+                    <td className="text-center">{formatDecimal(stockDespues)}</td>
+                    <td>{row.unidadMedida}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      {manualAdjustments.length > 0 && (
+        <article className="panel-card manual-adjustments-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Ajustes sin registro</p>
+              <h3>Aumentos / retiros manuales</h3>
+              <p className="muted">Cambios confirmados en el item sin generar recepción o entrega detallada (registrados como S/R en el kardex).</p>
+            </div>
+          </div>
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Código material</th>
+                  <th>Nombre del item</th>
+                  <th>Ajuste</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manualAdjustments.map((adjustment) => (
+                  <tr key={adjustment.id}>
+                    <td>{formatAdjustmentDate(adjustment.timestamp)}</td>
+                    <td className="cell-code">{adjustment.codigoMaterial ?? '—'}</td>
+                    <td className="text-wrap">{adjustment.descripcionMaterial || '—'}</td>
+                    <td>{formatAdjustmentAmount(adjustment.type, adjustment.amount)}</td>
+                    <td>
+                      <span className={`adjustment-tag ${adjustment.type === 'decrease' ? 'warning' : 'success'}`}>
+                        {adjustment.type === 'decrease' ? 'Retiro sin registro' : 'Aumento sin registro'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      )}
+    </section>
+  )
+}
+
+function RowActionsMenu({ onEdit, onDelete }) {
+  return (
+    <div className="row-actions-menu" role="group" aria-label="Acciones rápidas">
+      <button type="button" className="action-btn edit" onClick={() => onEdit?.()}>
+        <span className="action-icon icon-edit" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Z" />
+            <path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0L15.12 5.13l3.75 3.75 1.84-1.84Z" />
+          </svg>
+        </span>
+        Editar
+      </button>
+      <button type="button" className="action-btn delete" onClick={() => onDelete?.()}>
+        <span className="action-icon icon-delete" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+            <path d="M5 7h14" />
+            <path d="M9 7V5h6v2" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M7 7v11a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V7" />
+          </svg>
+        </span>
+        Eliminar
+      </button>
+    </div>
+  )
+}
+
+function Pagination({ page, totalPages, onChange }) {
+  if (!totalPages || totalPages <= 1) return null
+  const canGoBack = page > 1
+  const canGoForward = page < totalPages
+  const goTo = (next) => {
+    if (next < 1 || next > totalPages) return
+    onChange?.(next)
+  }
+
+  return (
+    <div className="table-pagination">
+      <button type="button" className="btn ghost" onClick={() => goTo(page - 1)} disabled={!canGoBack}>
+        ← Anterior
+      </button>
+      <span>Página {page} de {totalPages}</span>
+      <button type="button" className="btn ghost" onClick={() => goTo(page + 1)} disabled={!canGoForward}>
+        Siguiente →
+      </button>
+    </div>
+  )
+}
+
+function FormModal({ isOpen, title, description, children, onClose, onSubmit, submitLabel, loading, submitDisabled = false }) {
+  if (!isOpen) return null
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal-card">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Acción rápida</p>
+            <h3>{title}</h3>
+            {description && <p className="muted">{description}</p>}
+          </div>
+          <button type="button" className="btn ghost" onClick={onClose} aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        <form onSubmit={onSubmit}>
+          <div className="modal-body">
+            {children}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn ghost" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={loading || submitDisabled}
+              title={submitDisabled ? 'Completa todos los campos requeridos' : undefined}
+            >
+              {loading ? 'Guardando…' : submitLabel}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmModal({ isOpen, title, message, details, onCancel, onConfirm, loading }) {
+  if (!isOpen) return null
+  return (
+    <div className="modal-backdrop" role="alertdialog" aria-modal="true">
+      <div className="modal-card confirm">
+        <div className="modal-header">
+          <h3>{title}</h3>
+        </div>
+        <div className="modal-body">
+          <p className="modal-message">{message}</p>
+          {details && <p className="muted">{details}</p>}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn ghost" onClick={onCancel} disabled={loading}>
+            Cancelar
+          </button>
+          <button type="button" className="btn danger" onClick={onConfirm} disabled={loading}>
+            {loading ? 'Eliminando…' : 'Eliminar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StockAdjustmentPrompt({ prompt, onSubmitMovement, onSkip, onCancel, submitting, formatDecimal }) {
+  const intent = prompt?.intent
+  const [showForm, setShowForm] = useState(false)
+  const [formState, setFormState] = useState({ cantidad: '', contraparte: '', observaciones: '' })
+
+  useEffect(() => {
+    if (!intent) return
+    setShowForm(false)
+    setFormState({
+      cantidad: sanitizeDecimalInput(String(intent.amount ?? ''), QUANTITY_LIMITS.movement),
+      contraparte: '',
+      observaciones: ''
+    })
+  }, [intent])
+
+  if (!prompt?.open || !intent) return null
+
+  const { type, amount, snapshot } = intent
+  const actionLabel = type === 'entrega' ? 'Registrar entrega' : 'Registrar recepción'
+  const changeLabel = formatDecimal ? formatDecimal(amount) : amount
+  const description = type === 'entrega'
+    ? `Reduciste el stock en ${changeLabel}. ¿Quieres anotar una entrega para reflejarlo en el Kardex?`
+    : `Aumentaste el stock en ${changeLabel}. ¿Quieres anotar una recepción para reflejarlo en el Kardex?`
+  const counterpartLabel = type === 'entrega' ? 'Entregado a' : 'Recibido de'
+  const quantityLabel = type === 'entrega' ? 'Cantidad entregada' : 'Cantidad recibida'
+
+  const handleFieldChange = (field, value) => {
+    if (field === 'cantidad') {
+      setFormState((prev) => ({ ...prev, cantidad: sanitizeDecimalInput(value, QUANTITY_LIMITS.movement) }))
+    } else if (field === 'observaciones') {
+      setFormState((prev) => ({ ...prev, observaciones: sanitizeOptionalText(value, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true }) }))
+    } else {
+      const limit = type === 'entrega' ? TEXT_LIMITS.entregadoA : TEXT_LIMITS.recibidoDe
+      setFormState((prev) => ({ ...prev, contraparte: sanitizePlainText(value, limit, { titleCaseEnabled: true, preserveTrailingSpace: true }) }))
+    }
+  }
+
+  const numericQuantity = parseDecimalInput(formState.cantidad)
+  const isFormValid = showForm && Boolean(formState.contraparte.trim()) && numericQuantity !== null && numericQuantity > 0
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    if (!showForm) {
+      setShowForm(true)
+      return
+    }
+    if (!isFormValid || submitting) return
+    onSubmitMovement?.(formState)
+  }
+
+  return (
+    <div className="modal-backdrop prompt" role="dialog" aria-modal="true">
+      <form className="modal-card prompt-card" onSubmit={handleSubmit}>
+        <div className="modal-header">
+          <h3>Ajuste de stock detectado</h3>
+        </div>
+        <div className="modal-body">
+          <p className="modal-message">{description}</p>
+          {snapshot && (
+            <p className="muted">
+              Item: <strong>{snapshot.descripcionMaterial || snapshot.codigoMaterial}</strong>
+            </p>
+          )}
+          <div className="stock-prompt-actions">
+            <div className="stock-prompt-actions-group">
+              <button type="button" className="btn ghost" onClick={onSkip} disabled={submitting}>
+                Actualizar sin registros
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => setShowForm(true)}
+                disabled={submitting || showForm}
+              >
+                {actionLabel}
+              </button>
+            </div>
+            <button type="button" className="btn outline cancel-btn" onClick={onCancel} disabled={submitting}>
+              Cancelar
+            </button>
+          </div>
+          {showForm && (
+            <div className="stock-prompt-form">
+              <label>
+                {quantityLabel}
+                <input
+                  type="number"
+                  step="0.01"
+                  min={QUANTITY_LIMITS.movement.min}
+                  value={formState.cantidad}
+                  onChange={(e) => handleFieldChange('cantidad', e.target.value)}
+                  inputMode="decimal"
+                  onKeyDown={blockInvalidNumberKeys}
+                />
+              </label>
+              <label>
+                {counterpartLabel}
+                <input
+                  type="text"
+                  value={formState.contraparte}
+                  onChange={(e) => handleFieldChange('contraparte', e.target.value)}
+                  placeholder={type === 'entrega' ? 'Área solicitante' : 'Proveedor o responsable'}
+                />
+              </label>
+              <label className="full">
+                Observaciones
+                <textarea
+                  rows={3}
+                  value={formState.observaciones}
+                  onChange={(e) => handleFieldChange('observaciones', e.target.value)}
+                  placeholder="Describe el motivo del ajuste"
+                />
+              </label>
+              <div className="stock-prompt-form-footer full">
+                <button type="submit" className="btn primary" disabled={!isFormValid || submitting}>
+                  {submitting ? 'Registrando…' : actionLabel}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function ErrorOverlay({ dialog, onClose }) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setCopied(false)
+  }, [dialog?.message])
+
+  if (!dialog?.open) return null
+
+  const handleCopy = async () => {
+    if (!dialog?.message) return
+    try {
+      await navigator.clipboard?.writeText(dialog.message)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="error-overlay" role="alertdialog" aria-modal="true">
+      <div className="error-dialog">
+        <p className="eyebrow">Algo salió mal</p>
+        <h3>{dialog.title || 'Error inesperado'}</h3>
+        {dialog.message && <p className="error-message">{dialog.message}</p>}
+        {dialog.hint && <p className="error-hint">{dialog.hint}</p>}
+        <div className="error-dialog-actions">
+          {dialog.message && (
+            <button type="button" className="btn outline" onClick={handleCopy}>
+              {copied ? 'Copiado' : 'Copiar detalle'}
+            </button>
+          )}
+          <button type="button" className="btn primary" onClick={onClose}>
+            Entendido
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ToastStack({ toasts, onDismiss }) {
+  if (!toasts || toasts.length === 0) return null
+  return (
+    <div className="toast-stack">
+      {toasts.map((toast) => (
+        <div key={toast.id} className={`toast ${toast.intent ?? 'info'}`}>
+          <span>{toast.message}</span>
+          <button type="button" onClick={() => onDismiss?.(toast.id)} aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
