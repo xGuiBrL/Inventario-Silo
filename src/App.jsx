@@ -957,6 +957,7 @@ export default function App() {
     showStatus('success', 'Sesión finalizada')
   }, [showStatus])
 
+
   useEffect(() => {
     let cancelled = false
     const bootstrapSession = async () => {
