@@ -3,8 +3,8 @@ import { BrowserRouter as Router, Routes, Route, NavLink, Link, Navigate, useNav
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { utils, writeFile } from 'xlsx'
-import './App.css'
 import { API_URL } from './config'
+import './App.css'
 
 const QUERIES = {
   login: `mutation Login($usuario: String!, $password: String!) {
@@ -13,19 +13,36 @@ const QUERIES = {
   perfilActual: `query PerfilActual {
     perfilActual {
       id
-      nombreUsuario
       nombre
+      nombreUsuario
+      rol
     }
   }`,
   items: `query Items {
     items {
       id
+      categoriaId
+      ubicacionId
       codigoMaterial
       nombreMaterial
       descripcionMaterial
       cantidadStock
       localizacion
       unidadMedida
+    }
+  }`,
+  categorias: `query Categorias {
+    categorias {
+      id
+      nombre
+      descripcion
+    }
+  }`,
+  ubicaciones: `query Ubicaciones {
+    ubicaciones {
+      id
+      nombre
+      descripcion
     }
   }`,
   recepciones: `query Recepciones {
@@ -38,6 +55,7 @@ const QUERIES = {
       cantidadRecibida
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   entregas: `query Entregas {
@@ -50,6 +68,7 @@ const QUERIES = {
       cantidadEntregada
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   reporte: `query ReporteMensual($desde: DateTime!, $hasta: DateTime!) {
@@ -64,7 +83,7 @@ const QUERIES = {
       unidadMedida
     }
   }`,
-  kardex: `query Kardex($codigoMaterial: String!) {
+  kardex: `query KardexPorCodigo($codigoMaterial: String!) {
     kardexPorCodigoMaterial(codigoMaterial: $codigoMaterial) {
       codigoMaterial
       nombreMaterial
@@ -83,9 +102,24 @@ const QUERIES = {
       }
     }
   }`,
+  crearItem: `mutation CrearItem($input: ItemInput!) {
+    crearItem(input: $input) {
+      id
+      categoriaId
+      ubicacionId
+      codigoMaterial
+      nombreMaterial
+      descripcionMaterial
+      cantidadStock
+      localizacion
+      unidadMedida
+    }
+  }`,
   actualizarItem: `mutation ActualizarItem($input: ItemUpdateInput!) {
     actualizarItem(input: $input) {
       id
+      categoriaId
+      ubicacionId
       codigoMaterial
       nombreMaterial
       descripcionMaterial
@@ -97,16 +131,39 @@ const QUERIES = {
   eliminarItem: `mutation EliminarItem($id: String!) {
     eliminarItem(id: $id)
   }`,
-  crearItem: `mutation CrearItem($input: ItemInput!) {
-    crearItem(input: $input) {
+  crearCategoria: `mutation CrearCategoria($input: CategoriaInput!) {
+    crearCategoria(input: $input) {
       id
-      codigoMaterial
-      nombreMaterial
-      descripcionMaterial
-      cantidadStock
-      localizacion
-      unidadMedida
+      nombre
+      descripcion
     }
+  }`,
+  actualizarCategoria: `mutation ActualizarCategoria($input: CategoriaUpdateInput!) {
+    actualizarCategoria(input: $input) {
+      id
+      nombre
+      descripcion
+    }
+  }`,
+  eliminarCategoria: `mutation EliminarCategoria($id: String!) {
+    eliminarCategoria(id: $id)
+  }`,
+  crearUbicacion: `mutation CrearUbicacion($input: UbicacionInput!) {
+    crearUbicacion(input: $input) {
+      id
+      nombre
+      descripcion
+    }
+  }`,
+  actualizarUbicacion: `mutation ActualizarUbicacion($input: UbicacionUpdateInput!) {
+    actualizarUbicacion(input: $input) {
+      id
+      nombre
+      descripcion
+    }
+  }`,
+  eliminarUbicacion: `mutation EliminarUbicacion($id: String!) {
+    eliminarUbicacion(id: $id)
   }`,
   crearRecepcion: `mutation CrearRecepcion($input: RecepcionInput!) {
     crearRecepcion(input: $input) {
@@ -118,6 +175,7 @@ const QUERIES = {
       cantidadRecibida
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   actualizarRecepcion: `mutation ActualizarRecepcion($input: RecepcionUpdateInput!) {
@@ -130,6 +188,7 @@ const QUERIES = {
       cantidadRecibida
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   eliminarRecepcion: `mutation EliminarRecepcion($id: String!) {
@@ -145,6 +204,7 @@ const QUERIES = {
       cantidadEntregada
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   actualizarEntrega: `mutation ActualizarEntrega($input: EntregaUpdateInput!) {
@@ -157,6 +217,7 @@ const QUERIES = {
       cantidadEntregada
       unidadMedida
       observaciones
+      esSinRegistro
     }
   }`,
   eliminarEntrega: `mutation EliminarEntrega($id: String!) {
@@ -280,7 +341,6 @@ const TEXT_LIMITS = {
   descripcionMaterial: 140,
   localizacion: 40,
   unidadMedida: 10,
-  recibidoDe: 60,
   entregadoA: 60,
   observaciones: 220
 }
@@ -293,6 +353,20 @@ const QUANTITY_LIMITS = {
 const CODE_REGEX = /^[A-Z0-9-]+$/
 const CODE_WITH_SPACES_REGEX = /^[A-Z0-9- ]+$/
 const PLAIN_TEXT_REGEX = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]+$/
+const CATEGORY_PALETTE = ['#0f766e', '#2563eb', '#f97316', '#0ea5e9', '#dc2626', '#059669', '#f59e0b']
+const UNIT_OPTIONS = Object.freeze(['Lt', 'Kg', 'Mts', 'Und'])
+const UNIT_LOOKUP = UNIT_OPTIONS.reduce((acc, option) => {
+  acc[option.toUpperCase()] = option
+  return acc
+}, {})
+
+const getCanonicalUnit = (value) => {
+  if (!value) return null
+  const normalized = String(value).trim().toUpperCase()
+  return UNIT_LOOKUP[normalized] ?? null
+}
+
+const ensureUnitValue = (value, fallback = '') => getCanonicalUnit(value) ?? fallback
 
 const sanitizeCodeInput = (value, maxLength = TEXT_LIMITS.codigoMaterial, options = {}) => {
   if (!value) return ''
@@ -339,6 +413,32 @@ const sanitizeOptionalText = (value, maxLength, options = {}) => {
   return sanitizePlainText(value, maxLength, options)
 }
 
+const isSinRegistroLabel = (value) => typeof value === 'string' && value.trim().toUpperCase() === 'S/R'
+
+const resolveMovementDetail = (value, fallback = '') => {
+  if (!value) return fallback ?? ''
+  return isSinRegistroLabel(value) ? (fallback ?? '') : value
+}
+
+const shouldUseSinRegistroPlaceholder = (value) => {
+  if (typeof value !== 'string') return true
+  return value.trim() === '' || isSinRegistroLabel(value)
+}
+
+const getObservationDisplayValue = (value, esSinRegistro, placeholder = 'S/R') => {
+  if (esSinRegistro && shouldUseSinRegistroPlaceholder(value)) {
+    return placeholder
+  }
+  return value ?? ''
+}
+
+const getObservationEditableValue = (value, esSinRegistro) => {
+  if (esSinRegistro && shouldUseSinRegistroPlaceholder(value)) {
+    return ''
+  }
+  return value ?? ''
+}
+
 const sanitizeDecimalInput = (value, limits = QUANTITY_LIMITS.movement) => {
   if (!value) return ''
   const cleaned = value.replace(/,/g, '.').replace(/[^\d.]/g, '')
@@ -374,8 +474,12 @@ const validateItemForm = (form) => {
     errors.codigoMaterial = 'Usa letras, números, guiones o espacios.'
   }
 
-  if (!form.nombreMaterial) {
-    errors.nombreMaterial = 'Describe la categoría o familia.'
+  if (!form.categoriaId) {
+    errors.categoriaId = 'Selecciona una categoría existente.'
+  }
+
+  if (!form.ubicacionId) {
+    errors.ubicacionId = 'Selecciona una ubicación disponible.'
   }
 
   if (!form.descripcionMaterial) {
@@ -389,20 +493,40 @@ const validateItemForm = (form) => {
     errors.cantidadStock = buildRangeMessage(QUANTITY_LIMITS.stock.min, QUANTITY_LIMITS.stock.max)
   }
 
-  if (!form.unidadMedida) {
-    errors.unidadMedida = 'Define la unidad de medida.'
-  } else if (!CODE_REGEX.test(form.unidadMedida)) {
-    errors.unidadMedida = 'Usa únicamente letras y números.'
-  }
-
-  if (!form.localizacion) {
-    errors.localizacion = 'Indica la ubicación.'
+  if (!getCanonicalUnit(form.unidadMedida)) {
+    errors.unidadMedida = 'Selecciona una unidad válida.'
   }
 
   return {
     errors,
     isValid: Object.keys(errors).length === 0,
     quantity: stockValue ?? 0
+  }
+}
+
+const validateCategoriaForm = (form) => {
+  const errors = {}
+
+  if (!form.nombre) {
+    errors.nombre = 'Dale un nombre descriptivo a la categoría.'
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0
+  }
+}
+
+const validateUbicacionForm = (form) => {
+  const errors = {}
+
+  if (!form.nombre) {
+    errors.nombre = 'Asigna un nombre descriptivo.'
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0
   }
 }
 
@@ -591,6 +715,8 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
   const [lastSync, setLastSync] = useState(null)
+  const [categorias, setCategorias] = useState([])
+  const [ubicaciones, setUbicaciones] = useState([])
   const [items, setItems] = useState([])
   const [recepciones, setRecepciones] = useState([])
   const [entregas, setEntregas] = useState([])
@@ -615,11 +741,26 @@ export default function App() {
   const [toasts, setToasts] = useState([])
   const [errorDialog, setErrorDialog] = useState({ open: false, title: '', message: '', hint: '' })
   const [itemModalState, setItemModalState] = useState({ open: false, mode: 'create', id: '', originalStock: null })
+  const [categoriaModalState, setCategoriaModalState] = useState({ open: false, mode: 'create', id: '' })
+  const [ubicacionModalState, setUbicacionModalState] = useState({ open: false, mode: 'create', id: '' })
   const [recepcionModalState, setRecepcionModalState] = useState({ open: false, mode: 'create', id: '' })
   const [entregaModalState, setEntregaModalState] = useState({ open: false, mode: 'create', id: '' })
-  const [confirmState, setConfirmState] = useState({ open: false, resource: '', id: '', message: '', details: '', payload: null })
+  const [confirmState, setConfirmState] = useState({
+    open: false,
+    resource: '',
+    id: '',
+    message: '',
+    details: '',
+    payload: null,
+    requireMatch: false,
+    matchValue: '',
+    matchLabel: '',
+    confirmHint: ''
+  })
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [loading, setLoading] = useState({
+    categorias: true,
+    ubicaciones: true,
     items: true,
     recepciones: true,
     entregas: true,
@@ -627,6 +768,8 @@ export default function App() {
     reporte: false
   })
   const [saving, setSaving] = useState({
+    categoria: false,
+    ubicacion: false,
     item: false,
     recepcion: false,
     entrega: false
@@ -648,12 +791,20 @@ export default function App() {
   }, [])
 
   const [itemForm, setItemForm] = useState({
+    categoriaId: '',
+    ubicacionId: '',
     codigoMaterial: '',
-    nombreMaterial: '',
     descripcionMaterial: '',
     cantidadStock: '',
-    localizacion: '',
     unidadMedida: ''
+  })
+
+  const [categoriaForm, setCategoriaForm] = useState({
+    nombre: ''
+  })
+
+  const [ubicacionForm, setUbicacionForm] = useState({
+    nombre: ''
   })
 
   const [recepcionForm, setRecepcionForm] = useState({
@@ -675,19 +826,31 @@ export default function App() {
   })
 
   const [itemFormDirty, setItemFormDirty] = useState(false)
+  const [categoriaFormDirty, setCategoriaFormDirty] = useState(false)
+  const [ubicacionFormDirty, setUbicacionFormDirty] = useState(false)
   const [recepcionFormDirty, setRecepcionFormDirty] = useState(false)
   const [entregaFormDirty, setEntregaFormDirty] = useState(false)
 
-  const resetItemForm = useCallback(() => {
+  const resetItemForm = useCallback((categoriaId = '', ubicacionId = '') => {
     setItemForm({
+      categoriaId,
+      ubicacionId,
       codigoMaterial: '',
-      nombreMaterial: '',
       descripcionMaterial: '',
       cantidadStock: '',
-      localizacion: '',
       unidadMedida: ''
     })
     setItemFormDirty(false)
+  }, [])
+
+  const resetCategoriaForm = useCallback(() => {
+    setCategoriaForm({ nombre: '' })
+    setCategoriaFormDirty(false)
+  }, [])
+
+  const resetUbicacionForm = useCallback(() => {
+    setUbicacionForm({ nombre: '' })
+    setUbicacionFormDirty(false)
   }, [])
 
   const resetRecepcionForm = useCallback((overrides = {}) => {
@@ -729,39 +892,78 @@ export default function App() {
     setManualAdjustments((prev) => [entry, ...prev].slice(0, 20))
   }, [])
 
-  const openItemModal = useCallback((mode = 'create', item = null) => {
+  const openItemModal = useCallback((mode = 'create', item = null, categoriaOverrideId = null, ubicacionOverrideId = null) => {
     if (mode === 'edit' && item) {
       setItemForm({
+        categoriaId: item.categoriaId ?? '',
+        ubicacionId: item.ubicacionId ?? '',
         codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-        nombreMaterial: sanitizePlainText(item.nombreMaterial ?? '', TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true }),
         descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
         cantidadStock: sanitizeDecimalInput(String(item.cantidadStock ?? ''), QUANTITY_LIMITS.stock),
-        localizacion: sanitizePlainText(item.localizacion ?? '', TEXT_LIMITS.localizacion),
-        unidadMedida: sanitizeCodeInput(item.unidadMedida ?? '', TEXT_LIMITS.unidadMedida)
+        unidadMedida: ensureUnitValue(item.unidadMedida, '')
       })
       setItemModalState({ open: true, mode: 'edit', id: item.id ?? '', originalStock: Number(item.cantidadStock ?? 0) })
       setItemFormDirty(false)
     } else {
-      resetItemForm()
+      const defaultCategoriaId = categoriaOverrideId ?? categorias[0]?.id ?? ''
+      const defaultUbicacionId = ubicacionOverrideId ?? ubicaciones[0]?.id ?? ''
+      resetItemForm(defaultCategoriaId, defaultUbicacionId)
       setItemModalState({ open: true, mode: 'create', id: '', originalStock: null })
       setItemFormDirty(false)
     }
-  }, [resetItemForm])
+  }, [categorias, ubicaciones, resetItemForm])
 
   const closeItemModal = useCallback(() => {
     setItemModalState({ open: false, mode: 'create', id: '', originalStock: null })
-    resetItemForm()
-  }, [resetItemForm])
+    resetItemForm(categorias[0]?.id ?? '', ubicaciones[0]?.id ?? '')
+  }, [categorias, ubicaciones, resetItemForm])
+
+  const openCategoriaModal = useCallback((mode = 'create', categoria = null) => {
+    if (mode === 'edit' && categoria) {
+      setCategoriaForm({
+        nombre: sanitizePlainText(categoria.nombre ?? '', TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true })
+      })
+      setCategoriaModalState({ open: true, mode: 'edit', id: categoria.id ?? '' })
+      setCategoriaFormDirty(false)
+    } else {
+      resetCategoriaForm()
+      setCategoriaModalState({ open: true, mode: 'create', id: '' })
+    }
+  }, [resetCategoriaForm])
+
+  const closeCategoriaModal = useCallback(() => {
+    setCategoriaModalState({ open: false, mode: 'create', id: '' })
+    resetCategoriaForm()
+  }, [resetCategoriaForm])
+
+  const openUbicacionModal = useCallback((mode = 'create', ubicacion = null) => {
+    if (mode === 'edit' && ubicacion) {
+      setUbicacionForm({
+        nombre: sanitizePlainText(ubicacion.nombre ?? '', TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true })
+      })
+      setUbicacionModalState({ open: true, mode: 'edit', id: ubicacion.id ?? '' })
+      setUbicacionFormDirty(false)
+    } else {
+      resetUbicacionForm()
+      setUbicacionModalState({ open: true, mode: 'create', id: '' })
+    }
+  }, [resetUbicacionForm])
+
+  const closeUbicacionModal = useCallback(() => {
+    setUbicacionModalState({ open: false, mode: 'create', id: '' })
+    resetUbicacionForm()
+  }, [resetUbicacionForm])
 
   const openRecepcionModal = useCallback((mode = 'create', record = null, overrides = null) => {
     if (mode === 'edit' && record) {
+      const observationValue = getObservationEditableValue(record.observaciones, record.esSinRegistro)
       setRecepcionForm({
         recibidoDe: sanitizePlainText(record.recibidoDe ?? '', TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
         descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
         cantidadRecibida: sanitizeDecimalInput(String(record.cantidadRecibida ?? '')),
-        unidadMedida: sanitizeCodeInput(record.unidadMedida ?? '', TEXT_LIMITS.unidadMedida),
-        observaciones: sanitizeOptionalText(record.observaciones ?? '', TEXT_LIMITS.observaciones)
+        unidadMedida: ensureUnitValue(record.unidadMedida, ''),
+        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones)
       })
       setRecepcionModalState({ open: true, mode: 'edit', id: record.id ?? '' })
       setRecepcionFormDirty(false)
@@ -779,13 +981,14 @@ export default function App() {
 
   const openEntregaModal = useCallback((mode = 'create', record = null, overrides = null) => {
     if (mode === 'edit' && record) {
+      const observationValue = getObservationEditableValue(record.observaciones, record.esSinRegistro)
       setEntregaForm({
         entregadoA: sanitizePlainText(record.entregadoA ?? '', TEXT_LIMITS.entregadoA, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
         descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
         cantidadEntregada: sanitizeDecimalInput(String(record.cantidadEntregada ?? '')),
-        unidadMedida: sanitizeCodeInput(record.unidadMedida ?? '', TEXT_LIMITS.unidadMedida),
-        observaciones: sanitizeOptionalText(record.observaciones ?? '', TEXT_LIMITS.observaciones)
+        unidadMedida: ensureUnitValue(record.unidadMedida, ''),
+        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones)
       })
       setEntregaModalState({ open: true, mode: 'edit', id: record.id ?? '' })
       setEntregaFormDirty(false)
@@ -806,21 +1009,53 @@ export default function App() {
     const resourceLabels = {
       item: 'item del inventario',
       recepcion: 'recepción',
-      entrega: 'entrega'
+      entrega: 'entrega',
+      categoria: 'categoría',
+      ubicacion: 'ubicación'
     }
     const title = resourceLabels[resource] ?? 'registro'
-    setConfirmState({
+    const nextState = {
       open: true,
       resource,
       id: entity.id ?? '',
       message: `¿Estás seguro de que deseas eliminar este ${title}?`,
       details: 'Esta acción no se puede deshacer y ajustará el stock automáticamente.',
-      payload: entity
-    })
+      payload: entity,
+      requireMatch: false,
+      matchValue: '',
+      matchLabel: '',
+      confirmHint: ''
+    }
+
+    if (resource === 'item') {
+      const codigoMaterial = entity.codigoMaterial?.trim() ?? ''
+      const friendlyName = entity.descripcionMaterial?.trim() || entity.nombreMaterial?.trim() || codigoMaterial || 'este item'
+      nextState.message = `Eliminar ${friendlyName}${codigoMaterial ? ` (${codigoMaterial})` : ''}`
+      nextState.details = 'Se eliminará este item y todo resquicio asociado: recepciones, entregas, movimientos del kardex y resúmenes del reporte. Si deseas conservar el historial, edita su stock a 0 en lugar de eliminarlo.'
+      nextState.requireMatch = Boolean(codigoMaterial)
+      nextState.matchValue = codigoMaterial
+      nextState.matchLabel = codigoMaterial
+        ? `Escribe "${codigoMaterial}" para confirmar`
+        : 'Escribe el código del item para confirmar'
+      nextState.confirmHint = 'Por seguridad, escribe el código exactamente como aparece para habilitar la eliminación definitiva.'
+    }
+
+    setConfirmState(nextState)
   }, [])
 
   const closeConfirmDialog = useCallback(() => {
-    setConfirmState({ open: false, resource: '', id: '', message: '', details: '', payload: null })
+    setConfirmState({
+      open: false,
+      resource: '',
+      id: '',
+      message: '',
+      details: '',
+      payload: null,
+      requireMatch: false,
+      matchValue: '',
+      matchLabel: '',
+      confirmHint: ''
+    })
   }, [])
 
   const authedRequest = useCallback((query, variables = {}) => {
@@ -871,6 +1106,8 @@ export default function App() {
   }, [items])
 
   const itemValidation = useMemo(() => validateItemForm(itemForm), [itemForm])
+  const categoriaValidation = useMemo(() => validateCategoriaForm(categoriaForm), [categoriaForm])
+  const ubicacionValidation = useMemo(() => validateUbicacionForm(ubicacionForm), [ubicacionForm])
   const recepcionValidation = useMemo(() => validateRecepcionForm(recepcionForm), [recepcionForm])
   const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsByCodigo), [entregaForm, itemsByCodigo])
 
@@ -999,11 +1236,41 @@ export default function App() {
     setLoading((prev) => ({ ...prev, items: true }))
     try {
       const data = await authedRequest(QUERIES.items)
-      setItems(data.items ?? [])
+      const normalizedItems = (data.items ?? []).map((item) => ({
+        ...item,
+        unidadMedida: ensureUnitValue(item?.unidadMedida, '')
+      }))
+      setItems(normalizedItems)
     } catch (error) {
       showStatus('error', error.message)
     } finally {
       setLoading((prev) => ({ ...prev, items: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const fetchCategorias = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoading((prev) => ({ ...prev, categorias: true }))
+    try {
+      const data = await authedRequest(QUERIES.categorias)
+      setCategorias(data.categorias ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, categorias: false }))
+    }
+  }, [authedRequest, isAuthenticated, showStatus])
+
+  const fetchUbicaciones = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoading((prev) => ({ ...prev, ubicaciones: true }))
+    try {
+      const data = await authedRequest(QUERIES.ubicaciones)
+      setUbicaciones(data.ubicaciones ?? [])
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setLoading((prev) => ({ ...prev, ubicaciones: false }))
     }
   }, [authedRequest, isAuthenticated, showStatus])
 
@@ -1035,11 +1302,13 @@ export default function App() {
 
   const refreshLiveData = useCallback(async () => {
     await Promise.all([
+      fetchCategorias(),
+      fetchUbicaciones(),
       fetchItems(),
       fetchRecepciones(),
       fetchEntregas()
     ])
-  }, [fetchEntregas, fetchItems, fetchRecepciones])
+  }, [fetchCategorias, fetchEntregas, fetchItems, fetchRecepciones, fetchUbicaciones])
 
   const fetchReporte = useCallback(async ({ from, to }) => {
     if (!isAuthenticated) return
@@ -1084,6 +1353,24 @@ export default function App() {
         showStatus('success', 'Item eliminado')
         await Promise.all([
           fetchItems(),
+          fetchRecepciones(),
+          fetchEntregas(),
+          fetchReporte(reporteFilter)
+        ])
+      } else if (confirmState.resource === 'categoria') {
+        await authedRequest(QUERIES.eliminarCategoria, { id: confirmState.id })
+        showStatus('success', 'Categoría eliminada')
+        await Promise.all([
+          fetchCategorias(),
+          fetchItems(),
+          fetchReporte(reporteFilter)
+        ])
+      } else if (confirmState.resource === 'ubicacion') {
+        await authedRequest(QUERIES.eliminarUbicacion, { id: confirmState.id })
+        showStatus('success', 'Ubicación eliminada')
+        await Promise.all([
+          fetchUbicaciones(),
+          fetchItems(),
           fetchReporte(reporteFilter)
         ])
       } else if (confirmState.resource === 'recepcion') {
@@ -1114,6 +1401,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isAuthenticated) {
+      setCategorias([])
       setItems([])
       setRecepciones([])
       setEntregas([])
@@ -1146,18 +1434,47 @@ export default function App() {
   }, [entregas, recepciones, updateLastSync])
 
   const handleItemFormChange = (field, value) => {
+    if (field === 'categoriaId' || field === 'ubicacionId') {
+      setItemFormDirty(true)
+      setItemForm((prev) => ({ ...prev, [field]: value }))
+      return
+    }
+
+    if (field === 'unidadMedida') {
+      setItemFormDirty(true)
+      setItemForm((prev) => ({ ...prev, unidadMedida: getCanonicalUnit(value) ?? '' }))
+      return
+    }
+
     const sanitizers = {
       codigoMaterial: (input) => sanitizeCodeInput(input, TEXT_LIMITS.codigoMaterial, { allowSpaces: true, preserveTrailingSpace: true }),
-      nombreMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.nombreMaterial, { titleCaseEnabled: true }),
       descripcionMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.descripcionMaterial, { preserveTrailingSpace: true }),
-      cantidadStock: (input) => sanitizeDecimalInput(input, QUANTITY_LIMITS.stock),
-      localizacion: (input) => sanitizePlainText(input, TEXT_LIMITS.localizacion, { preserveTrailingSpace: true }),
-      unidadMedida: (input) => sanitizeCodeInput(input, TEXT_LIMITS.unidadMedida)
+      cantidadStock: (input) => sanitizeDecimalInput(input, QUANTITY_LIMITS.stock)
     }
     const sanitizer = sanitizers[field] ?? ((input) => input)
     const sanitizedValue = sanitizer(value)
     setItemFormDirty(true)
     setItemForm((prev) => ({ ...prev, [field]: sanitizedValue }))
+  }
+
+  const handleCategoriaFormChange = (field, value) => {
+    if (field !== 'nombre') return
+    const sanitizedValue = sanitizePlainText(value, TEXT_LIMITS.nombreMaterial, {
+      titleCaseEnabled: true,
+      preserveTrailingSpace: true
+    })
+    setCategoriaFormDirty(true)
+    setCategoriaForm((prev) => ({ ...prev, nombre: sanitizedValue }))
+  }
+
+  const handleUbicacionFormChange = (field, value) => {
+    if (field !== 'nombre') return
+    const sanitizedValue = sanitizePlainText(value, TEXT_LIMITS.nombreMaterial, {
+      titleCaseEnabled: true,
+      preserveTrailingSpace: true
+    })
+    setUbicacionFormDirty(true)
+    setUbicacionForm((prev) => ({ ...prev, nombre: sanitizedValue }))
   }
 
   const handleRecepcionChange = (field, value) => {
@@ -1168,7 +1485,7 @@ export default function App() {
         ...prev,
         codigoMaterial: normalizedCode,
         descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
-        unidadMedida: selected ? sanitizeCodeInput(selected.unidadMedida ?? '', TEXT_LIMITS.unidadMedida) : ''
+        unidadMedida: selected ? ensureUnitValue(selected.unidadMedida, '') : ''
       }))
       setRecepcionFormDirty(true)
       return
@@ -1192,7 +1509,7 @@ export default function App() {
         ...prev,
         codigoMaterial: normalizedCode,
         descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
-        unidadMedida: selected ? sanitizeCodeInput(selected.unidadMedida ?? '', TEXT_LIMITS.unidadMedida) : ''
+        unidadMedida: selected ? ensureUnitValue(selected.unidadMedida, '') : ''
       }))
       setEntregaFormDirty(true)
       return
@@ -1213,7 +1530,7 @@ export default function App() {
     const base = {
       codigoMaterial: intent.snapshot.codigoMaterial ?? '',
       descripcionMaterial: intent.snapshot.descripcionMaterial ?? '',
-      unidadMedida: intent.snapshot.unidadMedida ?? ''
+      unidadMedida: ensureUnitValue(intent.snapshot.unidadMedida, '')
     }
     const rawQuantity = intent.quickForm?.cantidad ?? intent.amount
     const parsedQuantity = parseDecimalInput(rawQuantity)
@@ -1239,7 +1556,8 @@ export default function App() {
       await fetchRecepciones()
       await fetchReporte(reporteFilter)
       showStatus('success', 'Recepción registrada automáticamente')
-    } else if (intent.type === 'entrega') {
+    }
+    if (intent.type === 'entrega') {
       const rawCounterpart = intent.quickForm?.contraparte || 'Ajuste automatizado'
       const entregadoA = sanitizePlainText(rawCounterpart, TEXT_LIMITS.entregadoA, { titleCaseEnabled: true })
       await authedRequest(QUERIES.crearEntrega, {
@@ -1303,21 +1621,26 @@ export default function App() {
     const payloadQuantity = movementIntent?.overrideQuantity ?? validation.quantity
     let success = false
     try {
+      const buildItemInput = (cantidad) => ({
+        categoriaId: itemForm.categoriaId,
+        ubicacionId: itemForm.ubicacionId,
+        codigoMaterial: itemForm.codigoMaterial,
+        descripcionMaterial: itemForm.descripcionMaterial,
+        cantidadStock: cantidad,
+        unidadMedida: itemForm.unidadMedida
+      })
+
       if (isEditMode) {
         await authedRequest(QUERIES.actualizarItem, {
           input: {
-            ...itemForm,
-            id: itemModalState.id,
-            cantidadStock: payloadQuantity
+            ...buildItemInput(payloadQuantity),
+            id: itemModalState.id
           }
         })
         showStatus('success', 'Item actualizado correctamente')
       } else {
         await authedRequest(QUERIES.crearItem, {
-          input: {
-            ...itemForm,
-            cantidadStock: validation.quantity
-          }
+          input: buildItemInput(validation.quantity)
         })
         showStatus('success', 'Item creado correctamente')
       }
@@ -1339,6 +1662,86 @@ export default function App() {
       setSaving((prev) => ({ ...prev, item: false }))
     }
     return success
+  }
+
+  const submitCategoria = async (event) => {
+    event?.preventDefault?.()
+    setCategoriaFormDirty(true)
+    if (!categoriaValidation.isValid) {
+      showStatus('error', 'Completa los campos obligatorios de la categoría')
+      return
+    }
+
+    setSaving((prev) => ({ ...prev, categoria: true }))
+    try {
+      const buildInput = () => ({ nombre: categoriaForm.nombre, descripcion: '' })
+      if (categoriaModalState.mode === 'edit' && categoriaModalState.id) {
+        await authedRequest(QUERIES.actualizarCategoria, {
+          input: {
+            ...buildInput(),
+            id: categoriaModalState.id
+          }
+        })
+        showStatus('success', 'Categoría actualizada')
+      } else {
+        await authedRequest(QUERIES.crearCategoria, {
+          input: buildInput()
+        })
+        showStatus('success', 'Categoría creada')
+      }
+
+      closeCategoriaModal()
+      await Promise.all([
+        fetchCategorias(),
+        fetchItems(),
+        fetchReporte(reporteFilter)
+      ])
+      updateLastSync(new Date())
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setSaving((prev) => ({ ...prev, categoria: false }))
+    }
+  }
+
+  const submitUbicacion = async (event) => {
+    event?.preventDefault?.()
+    setUbicacionFormDirty(true)
+    if (!ubicacionValidation.isValid) {
+      showStatus('error', 'Completa los campos obligatorios de la ubicación')
+      return
+    }
+
+    setSaving((prev) => ({ ...prev, ubicacion: true }))
+    try {
+      const buildInput = () => ({ nombre: ubicacionForm.nombre, descripcion: '' })
+      if (ubicacionModalState.mode === 'edit' && ubicacionModalState.id) {
+        await authedRequest(QUERIES.actualizarUbicacion, {
+          input: {
+            ...buildInput(),
+            id: ubicacionModalState.id
+          }
+        })
+        showStatus('success', 'Ubicación actualizada')
+      } else {
+        await authedRequest(QUERIES.crearUbicacion, {
+          input: buildInput()
+        })
+        showStatus('success', 'Ubicación creada')
+      }
+
+      closeUbicacionModal()
+      await Promise.all([
+        fetchUbicaciones(),
+        fetchItems(),
+        fetchReporte(reporteFilter)
+      ])
+      updateLastSync(new Date())
+    } catch (error) {
+      showStatus('error', error.message)
+    } finally {
+      setSaving((prev) => ({ ...prev, ubicacion: false }))
+    }
   }
 
   const handleStockPromptSkip = useCallback(async () => {
@@ -1564,6 +1967,7 @@ export default function App() {
               <>
                 <NavLink to="/" end>Inicio</NavLink>
                 <NavLink to="/inventario">Inventario</NavLink>
+                <NavLink to="/categorias">Categorías</NavLink>
                 <NavLink to="/recepciones">Recepciones</NavLink>
                 <NavLink to="/entregas">Entregas</NavLink>
                 <NavLink to="/kardex">Kardex</NavLink>
@@ -1615,6 +2019,30 @@ export default function App() {
                     onRequestEdit={(item) => openItemModal('edit', item)}
                     onRequestDelete={(item) => openConfirmDialog('item', item)}
                     onExport={(type, rows) => handleExport(type, rows ?? items)}
+                    hasCategorias={categorias.length > 0}
+                    hasUbicaciones={ubicaciones.length > 0}
+                  />
+                </ProtectedRoute>
+              )}
+            />
+            <Route
+              path="/categorias"
+              element={(
+                <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
+                  <CategoriasPage
+                    categorias={categorias}
+                    ubicaciones={ubicaciones}
+                    items={items}
+                    loadingCategorias={loading.categorias}
+                    loadingUbicaciones={loading.ubicaciones}
+                    onRequestAdd={() => openCategoriaModal('create')}
+                    onRequestEdit={(categoria) => openCategoriaModal('edit', categoria)}
+                    onRequestDelete={(categoria) => openConfirmDialog('categoria', categoria)}
+                    onQuickAddItem={(categoria) => openItemModal('create', null, categoria.id)}
+                    onRequestAddUbicacion={() => openUbicacionModal('create')}
+                    onRequestEditUbicacion={(ubicacion) => openUbicacionModal('edit', ubicacion)}
+                    onRequestDeleteUbicacion={(ubicacion) => openConfirmDialog('ubicacion', ubicacion)}
+                    onQuickAddItemWithUbicacion={(ubicacion) => openItemModal('create', null, null, ubicacion.id)}
                   />
                 </ProtectedRoute>
               )}
@@ -1633,11 +2061,18 @@ export default function App() {
                     onRequestEdit={(record) => openRecepcionModal('edit', record)}
                     onRequestDelete={(record) => openConfirmDialog('recepcion', record)}
                     onExport={(type, rows) => {
-                      const enriched = (rows ?? recepciones).map((row) => ({
+                      const source = rows ?? recepciones
+                      const dataset = source.map((row) => ({
                         ...row,
-                        nombreMaterial: itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
+                        codigoMaterial: row.__display?.codigoMaterial || row.codigoMaterial,
+                        descripcionMaterial: row.__display?.descripcionMaterial || row.descripcionMaterial,
+                        unidadMedida: row.__display?.unidadMedida || row.unidadMedida,
+                        observaciones: row.__display?.observaciones
+                          ?? getObservationDisplayValue(row.observaciones, row.esSinRegistro)
+                          ?? '',
+                        nombreMaterial: row.__categoria ?? itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
                       }))
-                      handleExport(type, enriched)
+                      handleExport(type, dataset)
                     }}
                   />
                 </ProtectedRoute>
@@ -1657,11 +2092,18 @@ export default function App() {
                     onRequestEdit={(record) => openEntregaModal('edit', record)}
                     onRequestDelete={(record) => openConfirmDialog('entrega', record)}
                     onExport={(type, rows) => {
-                      const enriched = (rows ?? entregas).map((row) => ({
+                      const source = rows ?? entregas
+                      const dataset = source.map((row) => ({
                         ...row,
-                        nombreMaterial: itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
+                        codigoMaterial: row.__display?.codigoMaterial || row.codigoMaterial,
+                        descripcionMaterial: row.__display?.descripcionMaterial || row.descripcionMaterial,
+                        unidadMedida: row.__display?.unidadMedida || row.unidadMedida,
+                        observaciones: row.__display?.observaciones
+                          ?? getObservationDisplayValue(row.observaciones, row.esSinRegistro)
+                          ?? '',
+                        nombreMaterial: row.__categoria ?? itemsByCodigo[row.codigoMaterial]?.nombreMaterial ?? ''
                       }))
-                      handleExport(type, enriched)
+                      handleExport(type, dataset)
                     }}
                   />
                 </ProtectedRoute>
@@ -1752,6 +2194,64 @@ export default function App() {
         <ErrorOverlay dialog={errorDialog} onClose={closeErrorDialog} />
 
         <FormModal
+          isOpen={categoriaModalState.open}
+          title={categoriaModalState.mode === 'edit' ? 'Editar categoría' : 'Crear categoría'}
+          description="Define grupos reutilizables para clasificar tus materiales."
+          onClose={closeCategoriaModal}
+          onSubmit={submitCategoria}
+          submitLabel={categoriaModalState.mode === 'edit' ? 'Guardar cambios' : 'Guardar categoría'}
+          loading={saving.categoria}
+          submitDisabled={!categoriaValidation.isValid}
+        >
+          <div className="form-grid">
+            <label>
+              Nombre de la categoría
+              <input
+                required
+                value={categoriaForm.nombre}
+                onChange={(e) => handleCategoriaFormChange('nombre', e.target.value)}
+                placeholder="Ej. Lubricantes"
+                maxLength={TEXT_LIMITS.nombreMaterial}
+                aria-invalid={categoriaFormDirty && categoriaValidation.errors.nombre ? 'true' : 'false'}
+                className={categoriaFormDirty && categoriaValidation.errors.nombre ? 'invalid' : ''}
+              />
+              {categoriaFormDirty && categoriaValidation.errors.nombre && (
+                <p className="field-error">{categoriaValidation.errors.nombre}</p>
+              )}
+            </label>
+          </div>
+        </FormModal>
+
+        <FormModal
+          isOpen={ubicacionModalState.open}
+          title={ubicacionModalState.mode === 'edit' ? 'Editar ubicación' : 'Registrar ubicación'}
+          description="Administra máquinas, silos o zonas para usarlas en tus items."
+          onClose={closeUbicacionModal}
+          onSubmit={submitUbicacion}
+          submitLabel={ubicacionModalState.mode === 'edit' ? 'Guardar cambios' : 'Guardar ubicación'}
+          loading={saving.ubicacion}
+          submitDisabled={!ubicacionValidation.isValid}
+        >
+          <div className="form-grid">
+            <label>
+              Nombre de la ubicación
+              <input
+                required
+                value={ubicacionForm.nombre}
+                onChange={(e) => handleUbicacionFormChange('nombre', e.target.value)}
+                placeholder="Ej. Tolva 2, Molino A"
+                maxLength={TEXT_LIMITS.nombreMaterial}
+                aria-invalid={ubicacionFormDirty && ubicacionValidation.errors.nombre ? 'true' : 'false'}
+                className={ubicacionFormDirty && ubicacionValidation.errors.nombre ? 'invalid' : ''}
+              />
+              {ubicacionFormDirty && ubicacionValidation.errors.nombre && (
+                <p className="field-error">{ubicacionValidation.errors.nombre}</p>
+              )}
+            </label>
+          </div>
+        </FormModal>
+
+        <FormModal
           isOpen={itemModalState.open}
           title={itemModalState.mode === 'edit' ? 'Editar item' : 'Registrar nuevo item'}
           description="Simplifica el alta o edición de items sin abandonar la tabla."
@@ -1780,17 +2280,24 @@ export default function App() {
             </label>
             <label>
               Categoría / familia
-              <input
+              <select
                 required
-                value={itemForm.nombreMaterial}
-                onChange={(e) => handleItemFormChange('nombreMaterial', e.target.value)}
-                placeholder="Clasificación principal"
-                maxLength={TEXT_LIMITS.nombreMaterial}
-                aria-invalid={itemFormDirty && itemValidation.errors.nombreMaterial ? 'true' : 'false'}
-                className={itemFormDirty && itemValidation.errors.nombreMaterial ? 'invalid' : ''}
-              />
-              {itemFormDirty && itemValidation.errors.nombreMaterial && (
-                <p className="field-error">{itemValidation.errors.nombreMaterial}</p>
+                value={itemForm.categoriaId}
+                onChange={(e) => handleItemFormChange('categoriaId', e.target.value)}
+                disabled={categorias.length === 0}
+                aria-invalid={itemFormDirty && itemValidation.errors.categoriaId ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.categoriaId ? 'invalid' : ''}
+              >
+                <option value="">Selecciona una categoría</option>
+                {categorias.map((categoria) => (
+                  <option key={categoria.id} value={categoria.id}>{categoria.nombre}</option>
+                ))}
+              </select>
+              {categorias.length === 0 && (
+                <p className="field-hint warning">Crea una categoría antes de registrar items.</p>
+              )}
+              {itemFormDirty && itemValidation.errors.categoriaId && (
+                <p className="field-error">{itemValidation.errors.categoriaId}</p>
               )}
             </label>
             <label className="full">
@@ -1834,31 +2341,45 @@ export default function App() {
             </label>
             <label>
               Unidad de medida
-              <input
+              <select
                 required
                 value={itemForm.unidadMedida}
                 onChange={(e) => handleItemFormChange('unidadMedida', e.target.value)}
-                placeholder="Kg, Lt, Und, etc."
-                maxLength={TEXT_LIMITS.unidadMedida}
                 aria-invalid={itemFormDirty && itemValidation.errors.unidadMedida ? 'true' : 'false'}
                 className={itemFormDirty && itemValidation.errors.unidadMedida ? 'invalid' : ''}
-              />
+              >
+                <option value="">Selecciona una unidad</option>
+                {UNIT_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
               {itemFormDirty && itemValidation.errors.unidadMedida && (
                 <p className="field-error">{itemValidation.errors.unidadMedida}</p>
               )}
             </label>
             <label>
               Ubicación / máquina
-              <input
-                value={itemForm.localizacion}
-                onChange={(e) => handleItemFormChange('localizacion', e.target.value)}
-                placeholder="Zona donde se almacena"
-                maxLength={TEXT_LIMITS.localizacion}
-                aria-invalid={itemFormDirty && itemValidation.errors.localizacion ? 'true' : 'false'}
-                className={itemFormDirty && itemValidation.errors.localizacion ? 'invalid' : ''}
-              />
-              {itemFormDirty && itemValidation.errors.localizacion && (
-                <p className="field-error">{itemValidation.errors.localizacion}</p>
+              <select
+                required
+                value={itemForm.ubicacionId}
+                onChange={(e) => handleItemFormChange('ubicacionId', e.target.value)}
+                disabled={ubicaciones.length === 0}
+                aria-invalid={itemFormDirty && itemValidation.errors.ubicacionId ? 'true' : 'false'}
+                className={itemFormDirty && itemValidation.errors.ubicacionId ? 'invalid' : ''}
+              >
+                <option value="">Selecciona una ubicación</option>
+                {!ubicaciones.some((ubicacion) => ubicacion.id === itemForm.ubicacionId) && itemForm.ubicacionId && (
+                  <option value={itemForm.ubicacionId} disabled>Ubicación asignada no disponible</option>
+                )}
+                {ubicaciones.map((ubicacion) => (
+                  <option key={ubicacion.id} value={ubicacion.id}>{ubicacion.nombre}</option>
+                ))}
+              </select>
+              {ubicaciones.length === 0 && (
+                <p className="field-hint warning">Registra una ubicación en la sección de categorías.</p>
+              )}
+              {itemFormDirty && itemValidation.errors.ubicacionId && (
+                <p className="field-error">{itemValidation.errors.ubicacionId}</p>
               )}
             </label>
           </div>
@@ -2053,6 +2574,10 @@ export default function App() {
           onCancel={closeConfirmDialog}
           onConfirm={handleDeleteConfirmed}
           loading={deleteLoading}
+          requireMatch={confirmState.requireMatch}
+          matchValue={confirmState.matchValue}
+          matchLabel={confirmState.matchLabel}
+          hint={confirmState.confirmHint}
         />
       </div>
     </Router>
@@ -2191,8 +2716,29 @@ function InventoryPage({
   onRequestAdd,
   onRequestEdit,
   onRequestDelete,
-  onExport
+  onExport,
+  hasCategorias,
+  hasUbicaciones
 }) {
+  const canCreateItems = hasCategorias && hasUbicaciones
+  const creationHint = useMemo(() => {
+    if (canCreateItems) return null
+    if (!hasCategorias && !hasUbicaciones) {
+      return (
+        <>
+          Crea una <Link to="/categorias">categoría</Link> y una ubicación antes de registrar items.
+        </>
+      )
+    }
+    if (!hasCategorias) {
+      return (
+        <>
+          Crea una <Link to="/categorias">categoría</Link> antes de registrar items.
+        </>
+      )
+    }
+    return 'Registra al menos una ubicación desde la sección de categorías antes de registrar items.'
+  }, [canCreateItems, hasCategorias, hasUbicaciones])
   const [filters, setFilters] = useState({
     categoria: 'all',
     ubicacion: 'all',
@@ -2264,9 +2810,12 @@ function InventoryPage({
         <div className="table-header-actions">
           {loadingItems && <span className="pill">Cargando…</span>}
           <ExportMenu onExportExcel={() => onExport('items-excel', filteredItems)} onExportPdf={() => onExport('items-pdf', filteredItems)} />
-          <button className="btn primary" type="button" onClick={onRequestAdd}>
+          <button className="btn primary" type="button" onClick={onRequestAdd} disabled={!canCreateItems}>
             + Agregar
           </button>
+          {!canCreateItems && creationHint && (
+            <p className="field-hint warning inline">{creationHint}</p>
+          )}
         </div>
       </div>
 
@@ -2366,6 +2915,428 @@ function InventoryPage({
         </div>
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </article>
+
+    </section>
+  )
+}
+
+function CategoriasPage({
+  categorias,
+  ubicaciones,
+  items,
+  loadingCategorias,
+  loadingUbicaciones,
+  onRequestAdd,
+  onRequestEdit,
+  onRequestDelete,
+  onQuickAddItem,
+  onRequestAddUbicacion,
+  onRequestEditUbicacion,
+  onRequestDeleteUbicacion,
+  onQuickAddItemWithUbicacion
+}) {
+  const [search, setSearch] = useState('')
+  const [locationSearch, setLocationSearch] = useState('')
+  const normalizedSearch = useMemo(() => search.trim().toLowerCase(), [search])
+  const normalizedLocationSearch = useMemo(() => locationSearch.trim().toLowerCase(), [locationSearch])
+
+  const usageByCategoria = useMemo(() => {
+    return items.reduce((acc, item) => {
+      if (!item?.categoriaId) return acc
+      acc[item.categoriaId] = (acc[item.categoriaId] ?? 0) + 1
+      return acc
+    }, {})
+  }, [items])
+
+  const enrichedCategorias = useMemo(() => {
+    return categorias.map((categoria) => ({
+      ...categoria,
+      totalItems: usageByCategoria[categoria.id] ?? 0
+    }))
+  }, [categorias, usageByCategoria])
+
+  const filteredCategorias = useMemo(() => {
+    if (!normalizedSearch) return enrichedCategorias
+    return enrichedCategorias.filter((categoria) => (
+      categoria.nombre?.toLowerCase().includes(normalizedSearch)
+    ))
+  }, [enrichedCategorias, normalizedSearch])
+
+  const featuredCategorias = useMemo(() => {
+    return [...enrichedCategorias]
+      .sort((a, b) => b.totalItems - a.totalItems)
+      .slice(0, 3)
+  }, [enrichedCategorias])
+
+  const getAccent = useCallback((nombre) => {
+    const hash = Array.from(nombre ?? '')
+      .reduce((acc, char) => acc + char.charCodeAt(0), 0)
+    if (CATEGORY_PALETTE.length === 0) {
+      return '#0f172a'
+    }
+    return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length]
+  }, [])
+
+  const totalItems = items.length
+  const averageItems = categorias.length ? Math.round(totalItems / categorias.length) : 0
+
+  const usageByUbicacion = useMemo(() => {
+    return items.reduce((acc, item) => {
+      if (!item?.ubicacionId) return acc
+      acc[item.ubicacionId] = (acc[item.ubicacionId] ?? 0) + 1
+      return acc
+    }, {})
+  }, [items])
+
+  const enrichedUbicaciones = useMemo(() => {
+    return ubicaciones.map((ubicacion) => ({
+      ...ubicacion,
+      totalItems: usageByUbicacion[ubicacion.id] ?? 0
+    }))
+  }, [ubicaciones, usageByUbicacion])
+
+  const filteredUbicaciones = useMemo(() => {
+    if (!normalizedLocationSearch) return enrichedUbicaciones
+    return enrichedUbicaciones.filter((ubicacion) => (
+      ubicacion.nombre?.toLowerCase().includes(normalizedLocationSearch)
+    ))
+  }, [enrichedUbicaciones, normalizedLocationSearch])
+
+  const topUbicaciones = useMemo(() => (
+    [...enrichedUbicaciones]
+      .sort((a, b) => b.totalItems - a.totalItems)
+      .slice(0, 3)
+  ), [enrichedUbicaciones])
+
+  const unassignedUbicaciones = useMemo(() => (
+    enrichedUbicaciones.filter((ubicacion) => ubicacion.totalItems === 0).length
+  ), [enrichedUbicaciones])
+
+  const usedUbicaciones = Math.max(enrichedUbicaciones.length - unassignedUbicaciones, 0)
+
+  const locationEmptyState = !loadingUbicaciones && ubicaciones.length === 0
+  const emptyState = !loadingCategorias && categorias.length === 0
+
+  return (
+    <section className="dashboard-section categories-section">
+      <div className="category-hero">
+        <article className="panel-card stat-card hero-summary">
+          <div className="stat-card-head">
+            <div>
+              <p className="eyebrow">Categorías activas</p>
+              <h2>{categorias.length}</h2>
+              <p className="muted">Agrupa materiales para búsquedas rápidas.</p>
+            </div>
+            <span className="hero-badge">Inventario</span>
+          </div>
+          <div className="stat-metrics">
+            <div className="metric-chip">
+              <p className="metric-label">Items totales</p>
+              <p className="metric-value">{totalItems}</p>
+              <p className="metric-subtitle">Incluye recepciones y entregas recientes</p>
+            </div>
+            <div className="metric-chip">
+              <p className="metric-label">Promedio por categoría</p>
+              <p className="metric-value">{averageItems || 0}</p>
+              <p className="metric-subtitle">Items/categoría</p>
+            </div>
+            <div className="metric-chip">
+              <p className="metric-label">Ubicaciones en uso</p>
+              <p className="metric-value">{usedUbicaciones}</p>
+              <p className="metric-subtitle">{enrichedUbicaciones.length} registradas</p>
+            </div>
+          </div>
+          <div className="stat-actions">
+            <button type="button" className="btn primary compact" onClick={onRequestAdd}>
+              + Nueva categoría
+            </button>
+            <button type="button" className="btn ghost compact" onClick={onRequestAddUbicacion}>
+              + Nueva ubicación
+            </button>
+          </div>
+        </article>
+        <article className={`panel-card stat-card hero-insights ${featuredCategorias.length === 0 ? 'category-highlight-empty' : ''}`}>
+          <div className="stat-card-head compact">
+            <div>
+              <p className="eyebrow">Más consultadas</p>
+              <p className="muted small">Top 3 según movimientos recientes</p>
+            </div>
+            <Link to="/inventario" className="btn ghost compact hero-link">Ver inventario</Link>
+          </div>
+          {featuredCategorias.length === 0 ? (
+            <div className="category-ranking-empty">
+              <p className="muted">Registra categorías para ver tendencias.</p>
+            </div>
+          ) : (
+            <ul className="hero-ranking">
+              {featuredCategorias.map((categoria, index) => {
+                const percent = totalItems > 0 ? Math.round((categoria.totalItems / totalItems) * 100) : 0
+                return (
+                  <li key={categoria.id}>
+                    <div className="hero-ranking-label">
+                      <span className="dot" style={{ backgroundColor: getAccent(categoria.nombre) }} />
+                      <div>
+                        <strong>{categoria.nombre}</strong>
+                        <p className="muted">{categoria.totalItems} {categoria.totalItems === 1 ? 'item' : 'items'}</p>
+                      </div>
+                    </div>
+                    <div className="hero-ranking-progress" aria-label={`Participación ${categoria.nombre}`}>
+                      <span style={{ width: `${Math.min(percent, 100)}%` }} />
+                    </div>
+                    <span className="hero-ranking-percent">{percent}%</span>
+                    <span className="hero-ranking-index">#{index + 1}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </article>
+      </div>
+
+      <article className="panel-card category-panel">
+        <div className="category-panel-header">
+          <div>
+            <p className="eyebrow">Catálogo</p>
+            <h2>Gestiona tus categorías</h2>
+            <p className="muted">Haz clic en cualquier tarjeta para editar, duplicar o añadir items.</p>
+          </div>
+          <div className="category-search-row">
+            <label>
+              Búsqueda
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Busca por nombre"
+              />
+            </label>
+            <button type="button" className="btn outline" onClick={onRequestAdd}>
+              + Registrar categoría
+            </button>
+          </div>
+        </div>
+
+        {emptyState ? (
+          <div className="category-empty">
+            <p className="eyebrow">Sin categorías</p>
+            <h3>Organiza tu inventario por familias</h3>
+            <p className="muted">Comienza creando una categoría y luego asigna tus items existentes.</p>
+            <button type="button" className="btn primary" onClick={onRequestAdd}>
+              Crear la primera categoría
+            </button>
+          </div>
+        ) : (
+          <div className="category-grid">
+            {loadingCategorias && (
+              <div className="category-skeleton" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
+            {!loadingCategorias && filteredCategorias.length === 0 && (
+              <div className="category-empty muted">
+                <p>No se encontraron categorías con ese criterio.</p>
+              </div>
+            )}
+            {!loadingCategorias && filteredCategorias.map((categoria) => {
+              const accent = getAccent(categoria.nombre)
+              const itemsLabel = categoria.totalItems === 1 ? 'item' : 'items'
+              const usagePercent = totalItems > 0 ? Math.round((categoria.totalItems / totalItems) * 100) : 0
+              return (
+                <article
+                  className="category-card"
+                  key={categoria.id}
+                  style={{ borderColor: accent }}
+                >
+                  <header className="category-card-header">
+                    <div className="category-badge" style={{ background: accent }}>
+                      {categoria.nombre.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="category-title">
+                      <p className="category-label">Categoría</p>
+                      <h3>{categoria.nombre}</h3>
+                      <p className="category-count">{categoria.totalItems} {itemsLabel}</p>
+                    </div>
+                    <div className="category-chip-actions" role="group" aria-label={`Acciones para ${categoria.nombre}`}>
+                      <button
+                        type="button"
+                        className="chip-action danger"
+                        onClick={() => onRequestDelete(categoria)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </header>
+                  <div className="category-progress">
+                    <div className="category-progress-bar">
+                      <span
+                        className="category-progress-value"
+                        style={{ width: `${Math.min(usagePercent, 100)}%`, backgroundColor: accent }}
+                      />
+                    </div>
+                    <div className="category-progress-labels">
+                      <span>{usagePercent > 0 ? `${usagePercent}% del inventario` : 'Sin items asignados'}</span>
+                      <span>{categoria.totalItems} {itemsLabel}</span>
+                    </div>
+                  </div>
+                  <div className="category-card-footer">
+                    <button type="button" className="btn ghost compact" onClick={() => onRequestEdit(categoria)}>
+                      Editar categoría
+                    </button>
+                    <button type="button" className="btn primary compact" onClick={() => onQuickAddItem(categoria)}>
+                      Crear item aquí
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </article>
+
+      <article className="panel-card location-panel">
+        <div className="category-panel-header">
+          <div>
+            <p className="eyebrow">Ubicaciones operativas</p>
+            <h2>Define zonas y máquinas reutilizables</h2>
+            <p className="muted">
+              {enrichedUbicaciones.length} ubicaciones · {unassignedUbicaciones} sin items asignados
+            </p>
+          </div>
+          <div className="category-search-row">
+            <label>
+              Búsqueda
+              <input
+                type="text"
+                value={locationSearch}
+                onChange={(e) => setLocationSearch(e.target.value)}
+                placeholder="Busca por nombre"
+              />
+            </label>
+            <button type="button" className="btn outline" onClick={onRequestAddUbicacion}>
+              + Registrar ubicación
+            </button>
+          </div>
+        </div>
+
+        <div className="location-insights">
+          <article className="insight-card">
+            <div className="insight-head">
+              <p className="eyebrow">Con más consumo</p>
+              <span className="muted small">{totalItems} items monitoreados</span>
+            </div>
+            {topUbicaciones.length === 0 ? (
+              <p className="muted">Registra ubicaciones para ver actividad.</p>
+            ) : (
+              <ul className="insight-list">
+                {topUbicaciones.map((ubicacion) => {
+                  const percent = totalItems > 0 ? Math.round((ubicacion.totalItems / totalItems) * 100) : 0
+                  return (
+                    <li key={ubicacion.id}>
+                      <div className="insight-label">
+                        <span className="dot" style={{ backgroundColor: getAccent(ubicacion.nombre ?? '') }} />
+                        <div>
+                          <strong>{ubicacion.nombre}</strong>
+                          <p className="muted">{ubicacion.totalItems} {ubicacion.totalItems === 1 ? 'item' : 'items'}</p>
+                        </div>
+                      </div>
+                      <div className="insight-progress" aria-label={`Participación ${ubicacion.nombre}`}>
+                        <span style={{ width: `${Math.min(percent, 100)}%` }} />
+                        <em>{percent}%</em>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </article>
+          <article className="insight-card highlight">
+            <p className="eyebrow">Ubicaciones en uso</p>
+            <div className="insight-value">{usedUbicaciones}</div>
+            <p className="muted">Actualmente asignadas a items activos.</p>
+            <button type="button" className="btn ghost compact" onClick={onRequestAddUbicacion}>
+              + Registrar ubicación
+            </button>
+          </article>
+        </div>
+
+        {locationEmptyState ? (
+          <div className="category-empty">
+            <p className="eyebrow">Sin ubicaciones</p>
+            <h3>Controla dónde vive cada recurso</h3>
+            <p className="muted">Crea la primera ubicación para habilitar el selector del formulario de items.</p>
+            <button type="button" className="btn primary" onClick={onRequestAddUbicacion}>
+              Crear la primera ubicación
+            </button>
+          </div>
+        ) : (
+          <div className="category-grid location-grid">
+            {loadingUbicaciones && (
+              <div className="category-skeleton" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
+            {!loadingUbicaciones && filteredUbicaciones.length === 0 && (
+              <div className="category-empty muted">
+                <p>No se encontraron ubicaciones con ese criterio.</p>
+              </div>
+            )}
+            {!loadingUbicaciones && filteredUbicaciones.map((ubicacion) => {
+              const accent = getAccent(ubicacion.nombre ?? '')
+              const itemsLabel = ubicacion.totalItems === 1 ? 'item' : 'items'
+              const badgeLabel = (ubicacion.nombre?.slice(0, 2) ?? 'UB').toUpperCase()
+              return (
+                <article className="category-card location-card" key={ubicacion.id} style={{ borderColor: accent }}>
+                  <header className="category-card-header">
+                    <div className="category-badge" style={{ background: accent }}>
+                      {badgeLabel}
+                    </div>
+                    <div className="category-title">
+                      <p className="category-label">Ubicación</p>
+                      <h3>{ubicacion.nombre}</h3>
+                      <p className="category-count">{ubicacion.totalItems} {itemsLabel}</p>
+                    </div>
+                    <div className="category-chip-actions" role="group" aria-label={`Acciones para ${ubicacion.nombre ?? 'esta ubicación'}`}>
+                      <button
+                        type="button"
+                        className="chip-action danger"
+                        onClick={() => onRequestDeleteUbicacion(ubicacion)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </header>
+                  <div className="location-meta enhanced">
+                    <span className={`pill ${ubicacion.totalItems > 0 ? 'success' : 'warning'}`}>
+                      {ubicacion.totalItems > 0 ? 'En uso' : 'Sin asignar'}
+                    </span>
+                    <p className="muted">
+                      {ubicacion.totalItems > 0 ? 'Disponible para reasignar' : 'Ideal para nuevos items'}
+                    </p>
+                  </div>
+                  <div className="category-card-footer location-footer">
+                    <button type="button" className="btn ghost compact" onClick={() => onRequestEditUbicacion(ubicacion)}>
+                      Editar ubicación
+                    </button>
+                    <button
+                      type="button"
+                      className="btn primary compact"
+                      onClick={() => onQuickAddItemWithUbicacion(ubicacion)}
+                      disabled={categorias.length === 0}
+                      title={categorias.length === 0 ? 'Registra al menos una categoría para crear items' : 'Crear item en esta ubicación'}
+                    >
+                      Crear item aquí
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </article>
     </section>
   )
 }
@@ -2389,16 +3360,34 @@ function RecepcionesPage({
   const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
   const normalizedRecibido = useMemo(() => filters.recibido.trim().toLowerCase(), [filters.recibido])
 
+  const recepcionesWithDisplay = useMemo(() => {
+    return recepciones.map((recepcion) => {
+      const item = itemsByCodigo[recepcion.codigoMaterial] ?? {}
+      const observationDisplay = getObservationDisplayValue(recepcion.observaciones, recepcion.esSinRegistro)
+      return {
+        ...recepcion,
+        __display: {
+          codigoMaterial: resolveMovementDetail(recepcion.codigoMaterial, item.codigoMaterial ?? ''),
+          descripcionMaterial: resolveMovementDetail(recepcion.descripcionMaterial, item.descripcionMaterial ?? ''),
+          unidadMedida: resolveMovementDetail(recepcion.unidadMedida, item.unidadMedida ?? ''),
+          observaciones: observationDisplay
+        },
+        __categoria: item.nombreMaterial ?? '—'
+      }
+    })
+  }, [itemsByCodigo, recepciones])
+
   const filteredRecepciones = useMemo(() => {
-    return recepciones.filter((recepcion) => {
-      const categoria = itemsByCodigo[recepcion.codigoMaterial]?.nombreMaterial?.toLowerCase() ?? ''
-      const descripcion = recepcion.descripcionMaterial?.toLowerCase() ?? ''
-      const matchesCodigo = !normalizedCodigo || recepcion.codigoMaterial?.toLowerCase().includes(normalizedCodigo)
+    return recepcionesWithDisplay.filter((recepcion) => {
+      const categoria = recepcion.__categoria?.toLowerCase() ?? ''
+      const descripcion = recepcion.__display?.descripcionMaterial?.toLowerCase() ?? ''
+      const codigo = (recepcion.__display?.codigoMaterial || recepcion.codigoMaterial || '').toLowerCase()
+      const matchesCodigo = !normalizedCodigo || codigo.includes(normalizedCodigo)
       const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
       const matchesRecibido = !normalizedRecibido || recepcion.recibidoDe?.toLowerCase().includes(normalizedRecibido)
       return matchesCodigo && matchesNombre && matchesRecibido
     })
-  }, [itemsByCodigo, normalizedCodigo, normalizedNombre, normalizedRecibido, recepciones])
+  }, [normalizedCodigo, normalizedNombre, normalizedRecibido, recepcionesWithDisplay])
 
   useEffect(() => {
     setPage(1)
@@ -2498,20 +3487,26 @@ function RecepcionesPage({
                 </tr>
               )}
               {!loadingRecepciones && !showEmptyState && !showNoMatches && paginatedRecepciones.map((recepcion, index) => {
-                const categoria = itemsByCodigo[recepcion.codigoMaterial]?.nombreMaterial ?? '—'
+                const display = recepcion.__display ?? {}
+                const categoria = recepcion.__categoria ?? (itemsByCodigo[recepcion.codigoMaterial]?.nombreMaterial ?? '—')
+                const codigoMaterial = display.codigoMaterial || recepcion.codigoMaterial || '—'
+                const descripcion = display.descripcionMaterial || recepcion.descripcionMaterial || '—'
+                const unidad = display.unidadMedida || recepcion.unidadMedida || '—'
+                const observationDisplay = display.observaciones ?? getObservationDisplayValue(recepcion.observaciones, recepcion.esSinRegistro)
+                const observaciones = observationDisplay || '—'
                 const absoluteIndex = filteredRecepciones.findIndex((candidate) => candidate.id === recepcion.id)
                 const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
                 return (
                   <tr key={recepcion.id}>
                     <td>{rowNumber}</td>
                     <td>{formatDate(recepcion.fecha)}</td>
-                    <td>{recepcion.codigoMaterial}</td>
+                    <td>{codigoMaterial}</td>
                     <td>{categoria}</td>
-                    <td className="text-wrap">{recepcion.descripcionMaterial}</td>
+                    <td className="text-wrap">{descripcion}</td>
                     <td>{recepcion.recibidoDe}</td>
                     <td>{formatDecimal(recepcion.cantidadRecibida)}</td>
-                    <td>{recepcion.unidadMedida}</td>
-                    <td className="text-wrap">{recepcion.observaciones || '—'}</td>
+                    <td>{unidad}</td>
+                    <td className="text-wrap">{observaciones || '—'}</td>
                     <td>
                       <RowActionsMenu
                         onEdit={() => onRequestEdit(recepcion)}
@@ -2549,16 +3544,34 @@ function EntregasPage({
   const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
   const normalizedEntregado = useMemo(() => filters.entregado.trim().toLowerCase(), [filters.entregado])
 
+  const entregasWithDisplay = useMemo(() => {
+    return entregas.map((entrega) => {
+      const item = itemsByCodigo[entrega.codigoMaterial] ?? {}
+      const observationDisplay = getObservationDisplayValue(entrega.observaciones, entrega.esSinRegistro)
+      return {
+        ...entrega,
+        __display: {
+          codigoMaterial: resolveMovementDetail(entrega.codigoMaterial, item.codigoMaterial ?? ''),
+          descripcionMaterial: resolveMovementDetail(entrega.descripcionMaterial, item.descripcionMaterial ?? ''),
+          unidadMedida: resolveMovementDetail(entrega.unidadMedida, item.unidadMedida ?? ''),
+          observaciones: observationDisplay
+        },
+        __categoria: item.nombreMaterial ?? '—'
+      }
+    })
+  }, [entregas, itemsByCodigo])
+
   const filteredEntregas = useMemo(() => {
-    return entregas.filter((entrega) => {
-      const categoria = itemsByCodigo[entrega.codigoMaterial]?.nombreMaterial?.toLowerCase() ?? ''
-      const descripcion = entrega.descripcionMaterial?.toLowerCase() ?? ''
-      const matchesCodigo = !normalizedCodigo || entrega.codigoMaterial?.toLowerCase().includes(normalizedCodigo)
+    return entregasWithDisplay.filter((entrega) => {
+      const categoria = entrega.__categoria?.toLowerCase() ?? ''
+      const descripcion = entrega.__display?.descripcionMaterial?.toLowerCase() ?? ''
+      const codigo = (entrega.__display?.codigoMaterial || entrega.codigoMaterial || '').toLowerCase()
+      const matchesCodigo = !normalizedCodigo || codigo.includes(normalizedCodigo)
       const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
       const matchesEntregado = !normalizedEntregado || entrega.entregadoA?.toLowerCase().includes(normalizedEntregado)
       return matchesCodigo && matchesNombre && matchesEntregado
     })
-  }, [entregas, itemsByCodigo, normalizedCodigo, normalizedEntregado, normalizedNombre])
+  }, [entregasWithDisplay, normalizedCodigo, normalizedEntregado, normalizedNombre])
 
   useEffect(() => {
     setPage(1)
@@ -2658,20 +3671,26 @@ function EntregasPage({
                 </tr>
               )}
               {!loadingEntregas && !showEmptyState && !showNoMatches && paginatedEntregas.map((entrega, index) => {
-                const categoria = itemsByCodigo[entrega.codigoMaterial]?.nombreMaterial ?? '—'
+                const display = entrega.__display ?? {}
+                const categoria = entrega.__categoria ?? (itemsByCodigo[entrega.codigoMaterial]?.nombreMaterial ?? '—')
+                const codigoMaterial = display.codigoMaterial || entrega.codigoMaterial || '—'
+                const descripcion = display.descripcionMaterial || entrega.descripcionMaterial || '—'
+                const unidad = display.unidadMedida || entrega.unidadMedida || '—'
+                const observationDisplay = display.observaciones ?? getObservationDisplayValue(entrega.observaciones, entrega.esSinRegistro)
+                const observaciones = observationDisplay || '—'
                 const absoluteIndex = filteredEntregas.findIndex((candidate) => candidate.id === entrega.id)
                 const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
                 return (
                   <tr key={entrega.id}>
                     <td>{rowNumber}</td>
                     <td>{formatDate(entrega.fecha)}</td>
-                    <td>{entrega.codigoMaterial}</td>
+                    <td>{codigoMaterial}</td>
                     <td>{categoria}</td>
-                    <td className="text-wrap">{entrega.descripcionMaterial}</td>
+                    <td className="text-wrap">{descripcion}</td>
                     <td>{entrega.entregadoA}</td>
                     <td>{formatDecimal(entrega.cantidadEntregada)}</td>
-                    <td>{entrega.unidadMedida}</td>
-                    <td className="text-wrap">{entrega.observaciones || '—'}</td>
+                    <td>{unidad}</td>
+                    <td className="text-wrap">{observaciones || '—'}</td>
                     <td>
                       <RowActionsMenu
                         onEdit={() => onRequestEdit(entrega)}
@@ -3021,14 +4040,19 @@ function KardexPage({
     if (!kardex?.movimientos) return []
     const fromDate = rangeFrom ? toLocalDate(rangeFrom) : null
     const toDate = rangeTo ? toLocalDate(rangeTo, true) : null
-    return kardex.movimientos.filter((mov) => {
-      if (!mov.fecha) return true
-      const current = new Date(mov.fecha)
-      if (Number.isNaN(current.getTime())) return true
-      if (fromDate && current < fromDate) return false
-      if (toDate && current > toDate) return false
-      return true
-    })
+    return kardex.movimientos
+      .filter((mov) => {
+        if (!mov.fecha) return true
+        const current = new Date(mov.fecha)
+        if (Number.isNaN(current.getTime())) return true
+        if (fromDate && current < fromDate) return false
+        if (toDate && current > toDate) return false
+        return true
+      })
+      .map((mov) => ({
+        ...mov,
+        __displayObservation: getObservationDisplayValue(mov.observaciones, mov.esSinRegistro)
+      }))
   }, [kardex, rangeFrom, rangeTo])
 
   const handleRangeChangeInternal = (field, value) => {
@@ -3236,8 +4260,14 @@ function KardexPage({
               </div>
               <div className="panel-actions">
                 <ExportMenu
-                  onExportExcel={() => onExport?.('kardex-excel', filteredMovements, { title: exportTitle })}
-                  onExportPdf={() => onExport?.('kardex-pdf', filteredMovements, { title: exportTitle })}
+                  onExportExcel={() => onExport?.('kardex-excel', filteredMovements.map((mov) => ({
+                    ...mov,
+                    observaciones: mov.__displayObservation ?? mov.observaciones ?? ''
+                  })), { title: exportTitle })}
+                  onExportPdf={() => onExport?.('kardex-pdf', filteredMovements.map((mov) => ({
+                    ...mov,
+                    observaciones: mov.__displayObservation ?? mov.observaciones ?? ''
+                  })), { title: exportTitle })}
                 />
               </div>
             </div>
@@ -3270,7 +4300,7 @@ function KardexPage({
                         </td>
                         <td className="text-wrap">{mov.referencia || '—'}</td>
                         <td className="text-wrap">{mov.descripcion}</td>
-                        <td className="text-wrap">{mov.observaciones || '—'}</td>
+                        <td className="text-wrap">{(mov.__displayObservation ?? '') || '—'}</td>
                         <td>{formatDecimal(mov.cantidad)}</td>
                         <td>{mov.unidadMedida}</td>
                       </tr>
@@ -3338,6 +4368,67 @@ function ReportesPage({
     const numeric = Number(amount) || 0
     const formatted = formatDecimal ? formatDecimal(Math.abs(numeric)) : Math.abs(numeric).toFixed(2)
     return `${type === 'decrease' ? '-' : '+'}${formatted}`
+  }
+
+  const derivedManualAdjustments = useMemo(() => {
+    if (!Array.isArray(resolvedRows) || resolvedRows.length === 0) return []
+    const periodLabel = rangeLabel && rangeLabel !== 'Rango sin definir' ? rangeLabel : 'Rango consultado'
+    return resolvedRows.flatMap((row) => {
+      const base = {
+        codigoMaterial: row.codigoMaterial ?? '—',
+        descripcionMaterial: row.descripcionMaterial ?? '—',
+        periodLabel,
+        source: 'aggregated'
+      }
+      const records = []
+      const entradasSr = Number(row.totalEntradasSinRegistro) || 0
+      const salidasSr = Number(row.totalSalidasSinRegistro) || 0
+      if (entradasSr > 0) {
+        records.push({
+          ...base,
+          id: `sr-in-${row.codigoMaterial}`,
+          amount: entradasSr,
+          type: 'increase'
+        })
+      }
+      if (salidasSr > 0) {
+        records.push({
+          ...base,
+          id: `sr-out-${row.codigoMaterial}`,
+          amount: salidasSr,
+          type: 'decrease'
+        })
+      }
+      return records
+    })
+  }, [rangeLabel, resolvedRows])
+
+  const mergedManualAdjustments = useMemo(() => {
+    const normalizedManuals = Array.isArray(manualAdjustments) ? manualAdjustments : []
+    return [...derivedManualAdjustments, ...normalizedManuals]
+  }, [derivedManualAdjustments, manualAdjustments])
+
+  const filteredManualAdjustments = useMemo(() => {
+    if (mergedManualAdjustments.length === 0) return []
+    const fromDate = filter?.from ? toLocalDate(filter.from) : null
+    const toDate = filter?.to ? toLocalDate(filter.to, true) : null
+    return mergedManualAdjustments.filter((adjustment) => {
+      if (!adjustment?.timestamp) {
+        return true
+      }
+      const current = new Date(adjustment.timestamp)
+      if (Number.isNaN(current.getTime())) return false
+      if (fromDate && current < fromDate) return false
+      if (toDate && current > toDate) return false
+      return true
+    })
+  }, [filter?.from, filter?.to, mergedManualAdjustments])
+
+  const renderAdjustmentDate = (adjustment) => {
+    if (adjustment?.timestamp) {
+      return formatAdjustmentDate(adjustment.timestamp)
+    }
+    return adjustment?.periodLabel || rangeLabel || 'Rango consultado'
   }
 
   return (
@@ -3451,30 +4542,34 @@ function ReportesPage({
         </div>
       </article>
 
-      {manualAdjustments.length > 0 && (
-        <article className="panel-card manual-adjustments-card">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Ajustes sin registro</p>
-              <h3>Aumentos / retiros manuales</h3>
-              <p className="muted">Cambios confirmados en el item sin generar recepción o entrega detallada (registrados como S/R en el kardex).</p>
-            </div>
+      <article className="panel-card manual-adjustments-card">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Ajustes sin registro</p>
+            <h3>Aumentos / retiros manuales</h3>
+            <p className="muted">Se muestran los movimientos manuales confirmados dentro del mismo rango de fechas del reporte.</p>
           </div>
-          <div className="table-wrapper">
-            <table>
-              <thead>
+        </div>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Código material</th>
+                <th>Nombre del item</th>
+                <th>Ajuste</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredManualAdjustments.length === 0 ? (
                 <tr>
-                  <th>Fecha</th>
-                  <th>Código material</th>
-                  <th>Nombre del item</th>
-                  <th>Ajuste</th>
-                  <th>Estado</th>
+                  <td colSpan={5} className="empty">Sin ajustes manuales para el periodo consultado.</td>
                 </tr>
-              </thead>
-              <tbody>
-                {manualAdjustments.map((adjustment) => (
+              ) : (
+                filteredManualAdjustments.map((adjustment) => (
                   <tr key={adjustment.id}>
-                    <td>{formatAdjustmentDate(adjustment.timestamp)}</td>
+                    <td>{renderAdjustmentDate(adjustment)}</td>
                     <td className="cell-code">{adjustment.codigoMaterial ?? '—'}</td>
                     <td className="text-wrap">{adjustment.descripcionMaterial || '—'}</td>
                     <td>{formatAdjustmentAmount(adjustment.type, adjustment.amount)}</td>
@@ -3484,12 +4579,12 @@ function ReportesPage({
                       </span>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </article>
-      )}
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
   )
 }
@@ -3582,7 +4677,36 @@ function FormModal({ isOpen, title, description, children, onClose, onSubmit, su
   )
 }
 
-function ConfirmModal({ isOpen, title, message, details, onCancel, onConfirm, loading }) {
+function ConfirmModal({
+  isOpen,
+  title,
+  message,
+  details,
+  onCancel,
+  onConfirm,
+  loading,
+  requireMatch = false,
+  matchValue = '',
+  matchLabel = '',
+  hint = ''
+}) {
+  const [typedValue, setTypedValue] = useState('')
+
+  useEffect(() => {
+    if (!isOpen) {
+      setTypedValue('')
+      return
+    }
+    setTypedValue('')
+  }, [isOpen, matchValue])
+
+  const normalizedMatch = (matchValue ?? '').trim()
+  const requiresMatch = Boolean(requireMatch && normalizedMatch)
+  const targetValue = normalizedMatch.toUpperCase()
+  const candidateValue = typedValue.trim().toUpperCase()
+  const hasMatch = !requiresMatch || candidateValue === targetValue
+  const confirmDisabled = loading || !hasMatch
+
   if (!isOpen) return null
   return (
     <div className="modal-backdrop" role="alertdialog" aria-modal="true">
@@ -3593,12 +4717,28 @@ function ConfirmModal({ isOpen, title, message, details, onCancel, onConfirm, lo
         <div className="modal-body">
           <p className="modal-message">{message}</p>
           {details && <p className="muted">{details}</p>}
+          {hint && <p className="confirm-warning">{hint}</p>}
+          {requiresMatch && (
+            <label className="confirm-input-field">
+              <span>{matchLabel || `Escribe "${normalizedMatch}" para confirmar`}</span>
+              <input
+                value={typedValue}
+                onChange={(event) => setTypedValue(event.target.value)}
+                placeholder={normalizedMatch}
+                autoComplete="off"
+                data-valid={hasMatch ? 'true' : 'false'}
+              />
+              <p className={`confirm-hint ${hasMatch ? '' : 'error'}`}>
+                {hasMatch ? 'Código confirmado.' : 'El texto no coincide con el código solicitado.'}
+              </p>
+            </label>
+          )}
         </div>
         <div className="modal-footer">
           <button type="button" className="btn ghost" onClick={onCancel} disabled={loading}>
             Cancelar
           </button>
-          <button type="button" className="btn danger" onClick={onConfirm} disabled={loading}>
+          <button type="button" className="btn danger" onClick={onConfirm} disabled={confirmDisabled}>
             {loading ? 'Eliminando…' : 'Eliminar'}
           </button>
         </div>
