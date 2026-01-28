@@ -2753,18 +2753,11 @@ function InventoryPage({
     return 'Registra al menos una ubicación desde la sección de categorías antes de registrar items.'
   }, [canCreateItems, hasCategorias, hasUbicaciones])
   const [filters, setFilters] = useState({
-    categoria: 'all',
     ubicacion: 'all',
-    search: '',
-    codigo: ''
+    search: ''
   })
   const [page, setPage] = useState(1)
   const pageSize = 10
-
-  const categorias = useMemo(() => {
-    const valores = items.map((item) => item.nombreMaterial).filter(Boolean)
-    return Array.from(new Set(valores)).sort()
-  }, [items])
 
   const ubicaciones = useMemo(() => {
     const valores = items.map((item) => item.localizacion).filter(Boolean)
@@ -2772,10 +2765,6 @@ function InventoryPage({
   }, [items])
 
   const normalizedSearch = useMemo(() => filters.search.trim().toLowerCase(), [filters.search])
-  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
-  const normalizedCategoria = useMemo(() => (
-    filters.categoria === 'all' ? 'all' : filters.categoria.trim().toLowerCase()
-  ), [filters.categoria])
   const normalizedUbicacion = useMemo(() => (
     filters.ubicacion === 'all' ? 'all' : filters.ubicacion.trim().toLowerCase()
   ), [filters.ubicacion])
@@ -2786,13 +2775,11 @@ function InventoryPage({
       const ubicacion = item.localizacion?.trim().toLowerCase() ?? ''
       const descripcion = item.descripcionMaterial?.toLowerCase() ?? ''
       const codigoMaterial = item.codigoMaterial?.toLowerCase() ?? ''
-      const matchesCategoria = normalizedCategoria === 'all' || categoria === normalizedCategoria
       const matchesUbicacion = normalizedUbicacion === 'all' || ubicacion === normalizedUbicacion
       const matchesSearch = !normalizedSearch || [codigoMaterial, categoria, descripcion].some((value) => value.includes(normalizedSearch))
-      const matchesCodigo = !normalizedCodigo || codigoMaterial.includes(normalizedCodigo)
-      return matchesCategoria && matchesUbicacion && matchesSearch && matchesCodigo
+      return matchesUbicacion && matchesSearch
     })
-  }, [items, normalizedCategoria, normalizedCodigo, normalizedSearch, normalizedUbicacion])
+  }, [items, normalizedSearch, normalizedUbicacion])
 
   useEffect(() => {
     setPage(1)
@@ -2842,24 +2829,6 @@ function InventoryPage({
               onChange={(e) => handleFilterChange('search', e.target.value)}
               placeholder="Código material, categoría o nombre"
             />
-          </label>
-          <label>
-            Código material
-            <input
-              type="text"
-              value={filters.codigo}
-              onChange={(e) => handleFilterChange('codigo', e.target.value)}
-              placeholder="Filtra por código"
-            />
-          </label>
-          <label>
-            Categoría
-            <select value={filters.categoria} onChange={(e) => handleFilterChange('categoria', e.target.value)}>
-              <option value="all">Todas</option>
-              {categorias.map((categoria) => (
-                <option key={categoria} value={categoria}>{categoria}</option>
-              ))}
-            </select>
           </label>
           <label>
             Ubicación
