@@ -709,6 +709,19 @@ export default function App() {
   useEffect(() => {
     document.title = 'Inventario Silo Tres Cruces'
   }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+
+    fetch('https://inventario-silo.onrender.com/health', {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal
+    }).catch(() => {
+      // Silenciar fallos: el objetivo es despertar el backend en Render.
+    })
+
+    return () => controller.abort()
+  }, [])
   const [token, setToken] = useState(() => localStorage.getItem('inventarioToken') ?? '')
   const [authUser, setAuthUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(Boolean(token))
