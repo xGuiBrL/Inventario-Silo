@@ -48,6 +48,7 @@ const QUERIES = {
   recepciones: `query Recepciones {
     recepciones {
       id
+      itemId
       fecha
       recibidoDe
       codigoMaterial
@@ -61,6 +62,7 @@ const QUERIES = {
   entregas: `query Entregas {
     entregas {
       id
+      itemId
       fecha
       entregadoA
       codigoMaterial
@@ -73,8 +75,10 @@ const QUERIES = {
   }`,
   reporte: `query ReporteMensual($desde: DateTime!, $hasta: DateTime!) {
     reporteMensual(desde: $desde, hasta: $hasta) {
+      itemId
       codigoMaterial
       nombreMaterial
+      descripcionMaterial
       totalEntradas
       totalSalidas
       totalEntradasSinRegistro
@@ -83,8 +87,8 @@ const QUERIES = {
       unidadMedida
     }
   }`,
-  kardex: `query KardexPorCodigo($codigoMaterial: String!) {
-    kardexPorCodigoMaterial(codigoMaterial: $codigoMaterial) {
+  kardex: `query KardexPorCodigo($codigoMaterial: String!, $itemId: String) {
+    kardexPorCodigoMaterial(codigoMaterial: $codigoMaterial, itemId: $itemId) {
       codigoMaterial
       nombreMaterial
       stockActual
@@ -168,6 +172,7 @@ const QUERIES = {
   crearRecepcion: `mutation CrearRecepcion($input: RecepcionInput!) {
     crearRecepcion(input: $input) {
       id
+      itemId
       fecha
       recibidoDe
       codigoMaterial
@@ -181,6 +186,7 @@ const QUERIES = {
   actualizarRecepcion: `mutation ActualizarRecepcion($input: RecepcionUpdateInput!) {
     actualizarRecepcion(input: $input) {
       id
+      itemId
       fecha
       recibidoDe
       codigoMaterial
@@ -197,6 +203,7 @@ const QUERIES = {
   crearEntrega: `mutation CrearEntrega($input: EntregaInput!) {
     crearEntrega(input: $input) {
       id
+      itemId
       fecha
       entregadoA
       codigoMaterial
@@ -210,6 +217,7 @@ const QUERIES = {
   actualizarEntrega: `mutation ActualizarEntrega($input: EntregaUpdateInput!) {
     actualizarEntrega(input: $input) {
       id
+      itemId
       fecha
       entregadoA
       codigoMaterial
@@ -341,6 +349,7 @@ const TEXT_LIMITS = {
   descripcionMaterial: 140,
   localizacion: 40,
   unidadMedida: 10,
+  recibidoDe: 60,
   entregadoA: 60,
   observaciones: 220
 }
@@ -530,11 +539,12 @@ const validateUbicacionForm = (form) => {
   }
 }
 
-const validateRecepcionForm = (form) => {
+const validateRecepcionForm = (form, itemsById) => {
   const errors = {}
   const quantityValue = parseDecimalInput(form.cantidadRecibida)
+  const selectedItem = form.itemId ? itemsById[form.itemId] : null
 
-  if (!form.codigoMaterial) {
+  if (!selectedItem) {
     errors.codigoMaterial = 'Selecciona un item del inventario.'
   }
 
@@ -555,13 +565,13 @@ const validateRecepcionForm = (form) => {
   }
 }
 
-const validateEntregaForm = (form, itemsByCodigo) => {
+const validateEntregaForm = (form, itemsById) => {
   const errors = {}
   const quantityValue = parseDecimalInput(form.cantidadEntregada)
-  const selectedItem = form.codigoMaterial ? itemsByCodigo[form.codigoMaterial] : null
+  const selectedItem = form.itemId ? itemsById[form.itemId] : null
   const availableStock = selectedItem ? Number(selectedItem.cantidadStock ?? 0) : null
 
-  if (!form.codigoMaterial) {
+  if (!selectedItem) {
     errors.codigoMaterial = 'Selecciona un item con stock.'
   }
 
@@ -735,7 +745,7 @@ export default function App() {
   const [entregas, setEntregas] = useState([])
   const [kardex, setKardex] = useState(null)
   const [reporte, setReporte] = useState([])
-  const [selectedKardex, setSelectedKardex] = useState('')
+  const [selectedKardexId, setSelectedKardexId] = useState('')
   const [kardexHistory, setKardexHistory] = useState([])
   const [kardexUsage, setKardexUsage] = useState({})
   const [kardexRange, setKardexRange] = useState(() => {
@@ -827,6 +837,7 @@ export default function App() {
   })
 
   const [recepcionForm, setRecepcionForm] = useState({
+    itemId: '',
     recibidoDe: '',
     codigoMaterial: '',
     descripcionMaterial: '',
@@ -836,6 +847,7 @@ export default function App() {
   })
 
   const [entregaForm, setEntregaForm] = useState({
+    itemId: '',
     entregadoA: '',
     codigoMaterial: '',
     descripcionMaterial: '',
@@ -874,6 +886,7 @@ export default function App() {
 
   const resetRecepcionForm = useCallback((overrides = {}) => {
     setRecepcionForm({
+      itemId: '',
       recibidoDe: '',
       codigoMaterial: '',
       descripcionMaterial: '',
@@ -887,6 +900,7 @@ export default function App() {
 
   const resetEntregaForm = useCallback((overrides = {}) => {
     setEntregaForm({
+      itemId: '',
       entregadoA: '',
       codigoMaterial: '',
       descripcionMaterial: '',
@@ -902,6 +916,7 @@ export default function App() {
     if (!intent?.snapshot) return
     const entry = {
       id: generateAdjustmentId(),
+      itemId: intent.snapshot.id ?? '',
       codigoMaterial: intent.snapshot.codigoMaterial ?? '—',
       descripcionMaterial: intent.snapshot.descripcionMaterial ?? '',
       amount: intent.amount ?? 0,
@@ -977,6 +992,7 @@ export default function App() {
     if (mode === 'edit' && record) {
       const observationValue = getObservationEditableValue(record.observaciones, record.esSinRegistro)
       setRecepcionForm({
+        itemId: record.itemId ?? '',
         recibidoDe: sanitizePlainText(record.recibidoDe ?? '', TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
         descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
@@ -1002,6 +1018,7 @@ export default function App() {
     if (mode === 'edit' && record) {
       const observationValue = getObservationEditableValue(record.observaciones, record.esSinRegistro)
       setEntregaForm({
+        itemId: record.itemId ?? '',
         entregadoA: sanitizePlainText(record.entregadoA ?? '', TEXT_LIMITS.entregadoA, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
         descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
@@ -1124,11 +1141,20 @@ export default function App() {
     }, {})
   }, [items])
 
+  const itemsById = useMemo(() => {
+    return items.reduce((acc, item) => {
+      if (item?.id) {
+        acc[item.id] = item
+      }
+      return acc
+    }, {})
+  }, [items])
+
   const itemValidation = useMemo(() => validateItemForm(itemForm), [itemForm])
   const categoriaValidation = useMemo(() => validateCategoriaForm(categoriaForm), [categoriaForm])
   const ubicacionValidation = useMemo(() => validateUbicacionForm(ubicacionForm), [ubicacionForm])
-  const recepcionValidation = useMemo(() => validateRecepcionForm(recepcionForm), [recepcionForm])
-  const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsByCodigo), [entregaForm, itemsByCodigo])
+  const recepcionValidation = useMemo(() => validateRecepcionForm(recepcionForm, itemsById), [recepcionForm, itemsById])
+  const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsById), [entregaForm, itemsById])
 
   const sortedItems = useMemo(() => {
     const collator = new Intl.Collator('es', { sensitivity: 'base' })
@@ -1160,17 +1186,27 @@ export default function App() {
 
   const recentKardexItems = useMemo(() => {
     return kardexHistory
-      .map((code) => itemsByCodigo[code])
+      .map((identifier) => itemsById[identifier] ?? itemsByCodigo[identifier])
       .filter(Boolean)
-  }, [itemsByCodigo, kardexHistory])
+  }, [itemsByCodigo, itemsById, kardexHistory])
 
   const topKardexItems = useMemo(() => {
     const ranked = Object.entries(kardexUsage)
       .sort(([, countA], [, countB]) => countB - countA)
-      .map(([code]) => itemsByCodigo[code])
+      .map(([identifier]) => itemsById[identifier] ?? itemsByCodigo[identifier])
       .filter(Boolean)
     return ranked.slice(0, 5)
-  }, [itemsByCodigo, kardexUsage])
+  }, [itemsByCodigo, itemsById, kardexUsage])
+
+  const selectedKardexItem = useMemo(() => {
+    if (selectedKardexId) {
+      return itemsById[selectedKardexId] ?? null
+    }
+    if (kardex?.codigoMaterial) {
+      return itemsByCodigo[kardex.codigoMaterial] ?? null
+    }
+    return null
+  }, [itemsByCodigo, itemsById, kardex, selectedKardexId])
 
   const showStatus = useCallback((intent, message) => {
     if (!message) return
@@ -1192,15 +1228,16 @@ export default function App() {
     setKardexRange((prev) => ({ ...prev, [field]: value }))
   }, [])
 
-  const recordKardexSelection = useCallback((itemCode) => {
-    if (!itemCode) return
+  const recordKardexSelection = useCallback((item) => {
+    const identifier = item?.id || item?.codigoMaterial
+    if (!identifier) return
     setKardexHistory((prev) => {
-      const filtered = prev.filter((code) => code !== itemCode)
-      return [itemCode, ...filtered].slice(0, 5)
+      const filtered = prev.filter((entry) => entry !== identifier)
+      return [identifier, ...filtered].slice(0, 5)
     })
     setKardexUsage((prev) => ({
       ...prev,
-      [itemCode]: (prev[itemCode] ?? 0) + 1
+      [identifier]: (prev[identifier] ?? 0) + 1
     }))
   }, [])
 
@@ -1445,7 +1482,7 @@ export default function App() {
       setEntregas([])
       setReporte([])
       setKardex(null)
-      setSelectedKardex('')
+      setSelectedKardexId('')
       setKardexHistory([])
       setKardexUsage({})
       return
@@ -1516,18 +1553,6 @@ export default function App() {
   }
 
   const handleRecepcionChange = (field, value) => {
-    if (field === 'codigoMaterial') {
-      const normalizedCode = sanitizeCodeInput(value, TEXT_LIMITS.codigoMaterial, { allowSpaces: true })
-      const selected = itemsByCodigo[normalizedCode]
-      setRecepcionForm((prev) => ({
-        ...prev,
-        codigoMaterial: normalizedCode,
-        descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
-        unidadMedida: selected ? ensureUnitValue(selected.unidadMedida, '') : ''
-      }))
-      setRecepcionFormDirty(true)
-      return
-    }
     const sanitizers = {
       recibidoDe: (input) => sanitizePlainText(input, TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true, preserveTrailingSpace: true }),
       cantidadRecibida: (input) => sanitizeDecimalInput(input),
@@ -1539,19 +1564,29 @@ export default function App() {
     setRecepcionForm((prev) => ({ ...prev, [field]: sanitizedValue }))
   }
 
-  const handleEntregaChange = (field, value) => {
-    if (field === 'codigoMaterial') {
-      const normalizedCode = sanitizeCodeInput(value, TEXT_LIMITS.codigoMaterial, { allowSpaces: true })
-      const selected = itemsByCodigo[normalizedCode]
-      setEntregaForm((prev) => ({
+  const handleRecepcionSelectItem = (item) => {
+    setRecepcionFormDirty(true)
+    if (!item) {
+      setRecepcionForm((prev) => ({
         ...prev,
-        codigoMaterial: normalizedCode,
-        descripcionMaterial: selected ? sanitizePlainText(selected.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial) : '',
-        unidadMedida: selected ? ensureUnitValue(selected.unidadMedida, '') : ''
+        itemId: '',
+        codigoMaterial: '',
+        descripcionMaterial: '',
+        unidadMedida: ''
       }))
-      setEntregaFormDirty(true)
       return
     }
+
+    setRecepcionForm((prev) => ({
+      ...prev,
+      itemId: item.id ?? '',
+      codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
+      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+      unidadMedida: ensureUnitValue(item.unidadMedida, '')
+    }))
+  }
+
+  const handleEntregaChange = (field, value) => {
     const sanitizers = {
       entregadoA: (input) => sanitizePlainText(input, TEXT_LIMITS.entregadoA, { titleCaseEnabled: true, preserveTrailingSpace: true }),
       cantidadEntregada: (input) => sanitizeDecimalInput(input),
@@ -1563,9 +1598,32 @@ export default function App() {
     setEntregaForm((prev) => ({ ...prev, [field]: sanitizedValue }))
   }
 
+  const handleEntregaSelectItem = (item) => {
+    setEntregaFormDirty(true)
+    if (!item) {
+      setEntregaForm((prev) => ({
+        ...prev,
+        itemId: '',
+        codigoMaterial: '',
+        descripcionMaterial: '',
+        unidadMedida: ''
+      }))
+      return
+    }
+
+    setEntregaForm((prev) => ({
+      ...prev,
+      itemId: item.id ?? '',
+      codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
+      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+      unidadMedida: ensureUnitValue(item.unidadMedida, '')
+    }))
+  }
+
   const launchMovementFromItem = async (intent) => {
     if (!intent?.type || !intent?.snapshot) return
     const base = {
+      itemId: intent.snapshot.id ?? intent.snapshot.itemId ?? '',
       codigoMaterial: intent.snapshot.codigoMaterial ?? '',
       descripcionMaterial: intent.snapshot.descripcionMaterial ?? '',
       unidadMedida: ensureUnitValue(intent.snapshot.unidadMedida, '')
@@ -1610,8 +1668,12 @@ export default function App() {
       await fetchReporte(reporteFilter)
       showStatus('success', 'Entrega registrada automáticamente')
     }
-    if (selectedKardex && selectedKardex === base.codigoMaterial) {
-      await fetchKardex(base.codigoMaterial)
+    const viewingKardexItem = selectedKardexId ? itemsById[selectedKardexId] : null
+    const matchesCurrentKardex = viewingKardexItem
+      ? (base.itemId && viewingKardexItem.id === base.itemId) || viewingKardexItem.codigoMaterial === base.codigoMaterial
+      : Boolean(!selectedKardexId && kardex?.codigoMaterial === base.codigoMaterial)
+    if (matchesCurrentKardex) {
+      await fetchKardex({ codigoMaterial: base.codigoMaterial, itemId: viewingKardexItem?.id })
     }
     updateLastSync(new Date())
   }
@@ -1671,6 +1733,7 @@ export default function App() {
           type: stockDelta < 0 ? 'entrega' : 'recepcion',
           amount: Number(Math.abs(stockDelta).toFixed(2)),
           snapshot: {
+            id: itemModalState.id ?? '',
             codigoMaterial: itemForm.codigoMaterial,
             descripcionMaterial: itemForm.descripcionMaterial,
             unidadMedida: itemForm.unidadMedida
@@ -1948,11 +2011,15 @@ export default function App() {
     }
   }
 
-  const fetchKardex = useCallback(async (codigoMaterial) => {
+  const fetchKardex = useCallback(async ({ codigoMaterial, itemId = '' }) => {
     if (!codigoMaterial) return false
     setLoading((prev) => ({ ...prev, kardex: true }))
     try {
-      const data = await authedRequest(QUERIES.kardex, { codigoMaterial })
+      const variables = { codigoMaterial }
+      if (itemId) {
+        variables.itemId = itemId
+      }
+      const data = await authedRequest(QUERIES.kardex, variables)
       setKardex(data.kardexPorCodigoMaterial)
       return true
     } catch (error) {
@@ -1964,14 +2031,20 @@ export default function App() {
     }
   }, [authedRequest, showStatus])
 
-  const handleSelectKardexItem = useCallback(async (codigoMaterial) => {
-    if (!codigoMaterial) return
-    setSelectedKardex(codigoMaterial)
-    const success = await fetchKardex(codigoMaterial)
-    if (success) {
-      recordKardexSelection(codigoMaterial)
+  const handleSelectKardexItem = useCallback(async (item) => {
+    if (!item) return
+    const codigoMaterial = item.codigoMaterial ?? ''
+    if (!codigoMaterial) {
+      showStatus('error', 'El ítem seleccionado no tiene código material.')
+      return
     }
-  }, [fetchKardex, recordKardexSelection])
+    const itemId = item.id ?? ''
+    setSelectedKardexId(itemId)
+    const success = await fetchKardex({ codigoMaterial, itemId })
+    if (success) {
+      recordKardexSelection(item)
+    }
+  }, [fetchKardex, recordKardexSelection, showStatus])
 
   const handleReporteChange = (field, value) => {
     setReporteFilter((prev) => ({ ...prev, [field]: value }))
@@ -2206,7 +2279,7 @@ export default function App() {
                 <ProtectedRoute isAuthenticated={isAuthenticated} loading={authLoading}>
                   <KardexPage
                     items={items}
-                    selectedItem={itemsByCodigo[selectedKardex]}
+                    selectedItem={selectedKardexItem}
                     onSelectItem={handleSelectKardexItem}
                     loading={loading.kardex}
                     kardex={kardex}
@@ -2217,7 +2290,7 @@ export default function App() {
                     formatDate={formatDate}
                     formatDecimal={formatDecimal}
                     onExport={(type, rows, meta = {}) => {
-                      const selected = itemsByCodigo[selectedKardex]
+                      const selected = selectedKardexItem
                       const dynamicTitle = meta.title ?? selected?.descripcionMaterial ?? kardex?.nombreMaterial ?? 'Kardex'
                       handleExport(type, rows ?? kardex?.movimientos ?? [], { title: dynamicTitle })
                     }}
@@ -2240,15 +2313,21 @@ export default function App() {
                     rangeLabel={rangeLabel}
                     now={now}
                     itemsByCodigo={itemsByCodigo}
+                    itemsById={itemsById}
                     hideZeroRows={hideZeroReportRows}
                     onToggleHideZero={(value) => setHideZeroReportRows(value)}
                     manualAdjustments={manualAdjustments}
                     onExport={(type, rows) => {
                       const dataset = rows ?? filteredReporteRows
-                      const enrichedReport = dataset.map((row) => ({
-                        ...row,
-                        descripcionMaterial: itemsByCodigo[row.codigoMaterial]?.descripcionMaterial ?? ''
-                      }))
+                      const enrichedReport = dataset.map((row) => {
+                        const itemFromId = row.itemId ? itemsById[row.itemId] : null
+                        const fallbackItem = !itemFromId && row.codigoMaterial ? itemsByCodigo[row.codigoMaterial] : null
+                        const sourceItem = itemFromId ?? fallbackItem
+                        return {
+                          ...row,
+                          descripcionMaterial: row.descripcionMaterial ?? sourceItem?.descripcionMaterial ?? ''
+                        }
+                      })
                       handleExport(type, enrichedReport, { title: `Reporte ${rangeLabel}` })
                     }}
                   />
@@ -2491,13 +2570,13 @@ export default function App() {
               label="Item"
               items={sortedItems}
               value={recepcionForm.codigoMaterial}
-              selectedItem={itemsByCodigo[recepcionForm.codigoMaterial]}
-              onSelect={(code) => handleRecepcionChange('codigoMaterial', code)}
+              selectedItem={itemsById[recepcionForm.itemId]}
+              onSelect={handleRecepcionSelectItem}
               dirty={recepcionFormDirty}
               error={recepcionFormDirty ? recepcionValidation.errors.codigoMaterial : ''}
               placeholder="Busca por código o nombre"
-              helper={recepcionForm.codigoMaterial
-                ? `Seleccionado: ${itemsByCodigo[recepcionForm.codigoMaterial]?.descripcionMaterial ?? ''}`
+              helper={recepcionForm.itemId
+                ? `Seleccionado: ${itemsById[recepcionForm.itemId]?.descripcionMaterial ?? ''}`
                 : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
               disabled={sortedItems.length === 0}
             />
@@ -2578,13 +2657,13 @@ export default function App() {
               label="Item"
               items={sortedItems}
               value={entregaForm.codigoMaterial}
-              selectedItem={itemsByCodigo[entregaForm.codigoMaterial]}
-              onSelect={(code) => handleEntregaChange('codigoMaterial', code)}
+              selectedItem={itemsById[entregaForm.itemId]}
+              onSelect={handleEntregaSelectItem}
               dirty={entregaFormDirty}
               error={entregaFormDirty ? entregaValidation.errors.codigoMaterial : ''}
               placeholder="Busca por código o nombre"
-              helper={entregaForm.codigoMaterial
-                ? `Seleccionado: ${itemsByCodigo[entregaForm.codigoMaterial]?.descripcionMaterial ?? ''}`
+              helper={entregaForm.itemId
+                ? `Seleccionado: ${itemsById[entregaForm.itemId]?.descripcionMaterial ?? ''}`
                 : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
               disabled={sortedItems.length === 0}
             />
@@ -3841,12 +3920,12 @@ function ItemAutocompleteField({
       }
       return
     }
-    const match = items.find((item) => item.codigoMaterial === value)
+    const match = selectedItem ?? items.find((item) => item.codigoMaterial === value)
     if (match) {
       setManualQuery(false)
       setQuery(`${match.codigoMaterial} · ${match.descripcionMaterial}`)
     }
-  }, [items, manualQuery, value])
+  }, [items, manualQuery, selectedItem, value])
 
   useEffect(() => {
     if (activeIndex < 0) return
@@ -3864,10 +3943,13 @@ function ItemAutocompleteField({
   }
 
   const handleSelectItem = (item) => {
-    if (!item) return
-    onSelect?.(item.codigoMaterial)
-    setManualQuery(false)
-    setQuery(`${item.codigoMaterial} · ${item.descripcionMaterial}`)
+    onSelect?.(item ?? null)
+    if (item) {
+      setManualQuery(false)
+      setQuery(`${item.codigoMaterial} · ${item.descripcionMaterial}`)
+    } else {
+      setQuery('')
+    }
     setDropdownOpen(false)
     setActiveIndex(-1)
   }
@@ -3926,7 +4008,7 @@ function ItemAutocompleteField({
     setManualQuery(false)
     setDropdownOpen(false)
     setActiveIndex(-1)
-    onSelect?.('')
+    onSelect?.(null)
   }
 
   const helperMessage = helper ?? (selectedItem
@@ -4081,8 +4163,10 @@ function KardexPage({
   }, [activeIndex])
 
   const handleSuggestionSelect = (item) => {
-    setSearchTerm(item.codigoMaterial ?? item.descripcionMaterial ?? '')
-    onSelectItem?.(item.codigoMaterial)
+    if (!item) return
+    const labelParts = [item.codigoMaterial, item.descripcionMaterial].filter(Boolean)
+    setSearchTerm(labelParts.join(' · ') || '')
+    onSelectItem?.(item)
   }
 
   const handleSearchKeyDown = (event) => {
@@ -4242,7 +4326,7 @@ function KardexPage({
           ) : (
             <div className="chip-grid">
               {recentList.map((item) => (
-                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item.codigoMaterial)}>
+                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item)}>
                   <span className="chip-title">{item.descripcionMaterial}</span>
                   <small>{item.nombreMaterial}</small>
                 </button>
@@ -4259,7 +4343,7 @@ function KardexPage({
           ) : (
             <div className="chip-grid">
               {popularList.map((item) => (
-                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item.codigoMaterial)}>
+                <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item)}>
                   <span className="chip-title">{item.descripcionMaterial}</span>
                   <small>{item.nombreMaterial}</small>
                 </button>
@@ -4408,6 +4492,7 @@ function ReportesPage({
   rangeLabel,
   now,
   itemsByCodigo,
+  itemsById,
   hideZeroRows,
   onToggleHideZero,
   onExport,
@@ -4415,20 +4500,26 @@ function ReportesPage({
 }) {
   const rows = Array.isArray(reporte) ? reporte : []
   const resolvedRows = useMemo(() => {
+    const byCodigo = itemsByCodigo ?? {}
+    const byId = itemsById ?? {}
     return rows.map((row) => {
+      const itemFromId = row.itemId ? byId[row.itemId] ?? null : null
       const codeKey = row.codigoMaterial ?? ''
-      const linkedItem = codeKey ? itemsByCodigo?.[codeKey] ?? null : null
+      const fallbackItem = !itemFromId && codeKey ? byCodigo[codeKey] ?? null : null
+      const linkedItem = itemFromId ?? fallbackItem
       return {
         ...row,
-        codigoMaterial: linkedItem?.codigoMaterial ?? row.codigoMaterial ?? '—',
-        nombreMaterial: linkedItem?.nombreMaterial ?? row.nombreMaterial ?? '—',
-        descripcionMaterial: linkedItem?.descripcionMaterial ?? row.descripcionMaterial ?? '—',
+        itemId: row.itemId ?? linkedItem?.id ?? '',
+        codigoMaterial: row.codigoMaterial ?? linkedItem?.codigoMaterial ?? '—',
+        nombreMaterial: row.nombreMaterial ?? linkedItem?.nombreMaterial ?? '—',
+        descripcionMaterial: row.descripcionMaterial ?? linkedItem?.descripcionMaterial ?? '—',
+        unidadMedida: row.unidadMedida ?? linkedItem?.unidadMedida ?? '—',
         stockDespuesBalance: Number(row.stockDespuesBalance ?? linkedItem?.cantidadStock ?? 0),
         totalEntradasSinRegistro: Number(row.totalEntradasSinRegistro) || 0,
         totalSalidasSinRegistro: Number(row.totalSalidasSinRegistro) || 0
       }
     })
-  }, [itemsByCodigo, rows])
+  }, [itemsByCodigo, itemsById, rows])
   const formatAdjustmentDate = (value) => {
     if (!value) return '—'
     const parsed = new Date(value)
@@ -4449,6 +4540,7 @@ function ReportesPage({
     const periodLabel = rangeLabel && rangeLabel !== 'Rango sin definir' ? rangeLabel : 'Rango consultado'
     return resolvedRows.flatMap((row) => {
       const base = {
+        itemId: row.itemId ?? '',
         codigoMaterial: row.codigoMaterial ?? '—',
         descripcionMaterial: row.descripcionMaterial ?? '—',
         periodLabel,
@@ -4460,7 +4552,7 @@ function ReportesPage({
       if (entradasSr > 0) {
         records.push({
           ...base,
-          id: `sr-in-${row.codigoMaterial}`,
+          id: `sr-in-${row.itemId ?? row.codigoMaterial}`,
           amount: entradasSr,
           type: 'increase'
         })
@@ -4468,7 +4560,7 @@ function ReportesPage({
       if (salidasSr > 0) {
         records.push({
           ...base,
-          id: `sr-out-${row.codigoMaterial}`,
+          id: `sr-out-${row.itemId ?? row.codigoMaterial}`,
           amount: salidasSr,
           type: 'decrease'
         })
@@ -4581,15 +4673,16 @@ function ReportesPage({
                   <td colSpan={8} className="empty">Sin datos para el periodo seleccionado</td>
                 </tr>
               )}
-              {resolvedRows.map((row) => {
+              {resolvedRows.map((row, index) => {
                 const totalEntradas = Number(row.totalEntradas) || 0
                 const totalSalidas = Number(row.totalSalidas) || 0
                 const totalEntradasSr = Number(row.totalEntradasSinRegistro) || 0
                 const totalSalidasSr = Number(row.totalSalidasSinRegistro) || 0
                 const balance = totalEntradas - totalSalidas
                 const stockDespues = Number(row.stockDespuesBalance) || 0
+                const rowKey = row.itemId || `${row.codigoMaterial}-${index}`
                 return (
-                  <tr key={row.codigoMaterial ?? row.id ?? row.descripcionMaterial}>
+                  <tr key={rowKey}>
                     <td className="cell-code">{row.codigoMaterial}</td>
                     <td className="text-wrap">{row.descripcionMaterial ?? '—'}</td>
                     <td>{row.nombreMaterial ?? '—'}</td>
