@@ -79,6 +79,7 @@ const QUERIES = {
       codigoMaterial
       nombreMaterial
       descripcionMaterial
+      localizacion
       totalEntradas
       totalSalidas
       totalEntradasSinRegistro
@@ -341,6 +342,25 @@ const exportToPdf = (rows, columns, filenameBase, title) => {
     styles: { fontSize: 10, cellPadding: 6 }
   })
   doc.save(`${buildFilename(filenameBase)}.pdf`)
+}
+
+const AUTOCOMPLETE_FALLBACK_HINT = 'Escribe al menos dos caracteres y confirma con Enter o clic.'
+
+const buildItemOptionLabel = (item) => {
+  if (!item) return ''
+  const parts = [item.codigoMaterial, item.descripcionMaterial, item.localizacion]
+    .map((value) => (value ?? '').trim())
+    .filter(Boolean)
+  return parts.join(' · ')
+}
+
+const buildItemSelectionHelper = (item, fallback = AUTOCOMPLETE_FALLBACK_HINT) => {
+  if (!item) return fallback
+  const name = (item.descripcionMaterial ?? item.codigoMaterial ?? 'Item seleccionado').trim()
+  const location = item.localizacion?.trim() ? ` · ${item.localizacion.trim()}` : ''
+  const stockValue = formatDecimal(Number(item.cantidadStock) || 0)
+  const unitLabel = item.unidadMedida ? ` ${item.unidadMedida}` : ''
+  return `Seleccionado: ${name}${location} — Stock: ${stockValue}${unitLabel}`
 }
 
 const TEXT_LIMITS = {
@@ -660,6 +680,7 @@ const EXPORT_CONFIG = {
       { header: '#', key: '__itemIndex' },
       { header: 'Código material', key: 'codigoMaterial' },
       { header: 'Categoría', key: 'nombreMaterial' },
+      { header: 'Localización', key: 'localizacion' },
       { header: 'Entradas', key: 'totalEntradas', format: (value) => formatDecimal(value) },
       { header: 'Salidas', key: 'totalSalidas', format: (value) => formatDecimal(value) },
       {
@@ -1207,6 +1228,7 @@ export default function App() {
     }
     return null
   }, [itemsByCodigo, itemsById, kardex, selectedKardexId])
+
 
   const showStatus = useCallback((intent, message) => {
     if (!message) return
@@ -2325,7 +2347,8 @@ export default function App() {
                         const sourceItem = itemFromId ?? fallbackItem
                         return {
                           ...row,
-                          descripcionMaterial: row.descripcionMaterial ?? sourceItem?.descripcionMaterial ?? ''
+                          descripcionMaterial: row.descripcionMaterial ?? sourceItem?.descripcionMaterial ?? '',
+                          localizacion: row.localizacion ?? sourceItem?.localizacion ?? ''
                         }
                       })
                       handleExport(type, enrichedReport, { title: `Reporte ${rangeLabel}` })
@@ -2575,9 +2598,6 @@ export default function App() {
               dirty={recepcionFormDirty}
               error={recepcionFormDirty ? recepcionValidation.errors.codigoMaterial : ''}
               placeholder="Busca por código o nombre"
-              helper={recepcionForm.itemId
-                ? `Seleccionado: ${itemsById[recepcionForm.itemId]?.descripcionMaterial ?? ''}`
-                : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
               disabled={sortedItems.length === 0}
             />
             <label>
@@ -2662,9 +2682,6 @@ export default function App() {
               dirty={entregaFormDirty}
               error={entregaFormDirty ? entregaValidation.errors.codigoMaterial : ''}
               placeholder="Busca por código o nombre"
-              helper={entregaForm.itemId
-                ? `Seleccionado: ${itemsById[entregaForm.itemId]?.descripcionMaterial ?? ''}`
-                : 'Escribe al menos dos caracteres y confirma con Enter o clic.'}
               disabled={sortedItems.length === 0}
             />
             <label>
@@ -2928,7 +2945,13 @@ function InventoryPage({
     search: ''
   })
   const [page, setPage] = useState(1)
-  const pageSize = 10
+  const pageSize = 20
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedRowIds, setSelectedRowIds] = useState(() => new Set())
+  const buildRowKey = useCallback((item) => item.id
+    ?? item.codigoMaterial
+    ?? `${item.descripcionMaterial ?? 'item'}-${item.localizacion ?? 'sin-ubicacion'}`,
+  [])
 
   const ubicaciones = useMemo(() => {
     const valores = items.map((item) => item.localizacion).filter(Boolean)
@@ -2951,24 +2974,101 @@ function InventoryPage({
       return matchesUbicacion && matchesSearch
     })
   }, [items, normalizedSearch, normalizedUbicacion])
+  const visibleRowIds = useMemo(() => filteredItems.map((item) => buildRowKey(item)), [buildRowKey, filteredItems])
 
   useEffect(() => {
     setPage(1)
   }, [filters])
+
+  useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === 0) return prev
+      const allowed = new Set(visibleRowIds)
+      let mutated = false
+      const next = new Set()
+      prev.forEach((id) => {
+        if (allowed.has(id)) {
+          next.add(id)
+        } else {
+          mutated = true
+        }
+      })
+      return mutated ? next : prev
+    })
+  }, [visibleRowIds])
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize))
   const paginatedItems = useMemo(() => {
     const start = (page - 1) * pageSize
     return filteredItems.slice(start, start + pageSize)
   }, [filteredItems, page, pageSize])
+  const selectedRows = useMemo(() => {
+    if (selectedRowIds.size === 0) return []
+    const idSet = selectedRowIds
+    return filteredItems.filter((item) => idSet.has(buildRowKey(item)))
+  }, [buildRowKey, filteredItems, selectedRowIds])
 
   const hasItems = items.length > 0
   const showEmptyState = !loadingItems && !hasItems
   const showNoMatches = !loadingItems && hasItems && filteredItems.length === 0
+  const emptyColSpan = selectionMode ? 9 : 8
 
   const handleFilterChange = (field, value) => {
     setFilters((prev) => ({ ...prev, [field]: value }))
   }
+
+  const toggleRowSelection = (rowId) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
+  }
+
+  const handleRowClick = (event, rowId) => {
+    if (!selectionMode) return
+    const target = event.target
+    if (target instanceof Element) {
+      if (target.closest('.row-select-checkbox')) {
+        return
+      }
+      const interactive = target.closest('button, a, [role="button"], input, select, textarea, label')
+      if (interactive) {
+        return
+      }
+    }
+    event.preventDefault()
+    toggleRowSelection(rowId)
+  }
+
+  const handleToggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedRowIds(new Set())
+      }
+      return !prev
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (!filteredItems.length) return
+    setSelectedRowIds(new Set(visibleRowIds))
+  }
+
+  const handleClearSelection = () => {
+    setSelectedRowIds(new Set())
+  }
+
+  const handleExportSelected = (kind) => {
+    if (selectedRows.length === 0) return
+    onExport(kind, selectedRows)
+  }
+
+  const isSelectionButtonDisabled = !items.length && !selectionMode
 
   return (
     <section className="dashboard-section">
@@ -2980,6 +3080,15 @@ function InventoryPage({
         </div>
         <div className="table-header-actions">
           {loadingItems && <span className="pill">Cargando…</span>}
+          <button
+            className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
+            type="button"
+            onClick={handleToggleSelectionMode}
+            disabled={isSelectionButtonDisabled}
+            aria-pressed={selectionMode}
+          >
+            {selectionMode ? 'Cancelar selección' : 'Seleccionar'}
+          </button>
           <ExportMenu onExportExcel={() => onExport('items-excel', filteredItems)} onExportPdf={() => onExport('items-pdf', filteredItems)} />
           <button className="btn primary" type="button" onClick={onRequestAdd} disabled={!canCreateItems}>
             + Agregar
@@ -2990,7 +3099,7 @@ function InventoryPage({
         </div>
       </div>
 
-      <article className="panel-card table-card">
+      <article className={`panel-card table-card ${selectionMode ? 'selection-active' : ''}`}>
         <div className="table-search-row">
           <label className="search-field">
             Búsqueda rápida
@@ -3011,11 +3120,21 @@ function InventoryPage({
             </select>
           </label>
         </div>
+        <SelectionToolbar
+          active={selectionMode}
+          selectedCount={selectedRowIds.size}
+          totalCount={filteredItems.length}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+          onExportExcel={() => handleExportSelected('items-excel')}
+          onExportPdf={() => handleExportSelected('items-pdf')}
+        />
 
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
+                {selectionMode && <th className="select-column" aria-label="Seleccionar fila" />}
                 <th>#</th>
                 <th>Código material</th>
                 <th>Categoría</th>
@@ -3029,24 +3148,42 @@ function InventoryPage({
             <tbody>
               {loadingItems && (
                 <tr>
-                  <td colSpan={8} className="empty">Cargando tabla…</td>
+                  <td colSpan={emptyColSpan} className="empty">Cargando tabla…</td>
                 </tr>
               )}
               {showEmptyState && (
                 <tr>
-                  <td colSpan={8} className="empty">No hay items registrados</td>
+                  <td colSpan={emptyColSpan} className="empty">No hay items registrados</td>
                 </tr>
               )}
               {showNoMatches && (
                 <tr>
-                  <td colSpan={8} className="empty">Sin coincidencias para los filtros aplicados</td>
+                  <td colSpan={emptyColSpan} className="empty">Sin coincidencias para los filtros aplicados</td>
                 </tr>
               )}
               {!loadingItems && !showEmptyState && !showNoMatches && paginatedItems.map((item, index) => {
+                const rowId = buildRowKey(item)
+                const isSelected = selectedRowIds.has(rowId)
                 const absoluteIndex = filteredItems.findIndex((candidate) => candidate.id === item.id)
                 const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
                 return (
-                  <tr key={item.id ?? `${item.codigoMaterial}-${index}`}>
+                  <tr
+                    key={rowId}
+                    className={[selectionMode ? 'selectable-row' : '', isSelected ? 'row-selected' : ''].filter(Boolean).join(' ')}
+                    onClick={(event) => handleRowClick(event, rowId)}
+                    aria-selected={selectionMode ? isSelected : undefined}
+                  >
+                    {selectionMode && (
+                      <td className="select-column">
+                        <input
+                          type="checkbox"
+                          className="row-select-checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRowSelection(rowId)}
+                          aria-label={`Seleccionar ${item.descripcionMaterial}`}
+                        />
+                      </td>
+                    )}
                     <td>{rowNumber}</td>
                     <td>{item.codigoMaterial}</td>
                     <td>{item.nombreMaterial}</td>
@@ -3505,12 +3642,16 @@ function RecepcionesPage({
   onRequestDelete,
   onExport
 }) {
-  const [filters, setFilters] = useState({ codigo: '', nombre: '', recibido: '' })
+  const [filters, setFilters] = useState({ search: '', recibido: '' })
   const [page, setPage] = useState(1)
-  const pageSize = 10
+  const pageSize = 20
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedRowIds, setSelectedRowIds] = useState(() => new Set())
+  const collator = useMemo(() => new Intl.Collator('es', { sensitivity: 'base' }), [])
+  const normalize = useCallback((value) => (value ?? '').trim(), [])
+  const buildRowKey = useCallback((row) => row.id ?? `${row.codigoMaterial ?? 'recepcion'}-${row.fecha}`, [])
 
-  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
-  const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
+  const normalizedSearch = useMemo(() => filters.search.trim().toLowerCase(), [filters.search])
   const normalizedRecibido = useMemo(() => filters.recibido.trim().toLowerCase(), [filters.recibido])
 
   const recepcionesWithDisplay = useMemo(() => {
@@ -3535,29 +3676,121 @@ function RecepcionesPage({
       const categoria = recepcion.__categoria?.toLowerCase() ?? ''
       const descripcion = recepcion.__display?.descripcionMaterial?.toLowerCase() ?? ''
       const codigo = (recepcion.__display?.codigoMaterial || recepcion.codigoMaterial || '').toLowerCase()
-      const matchesCodigo = !normalizedCodigo || codigo.includes(normalizedCodigo)
-      const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
+      const matchesSearch = !normalizedSearch || [codigo, categoria, descripcion].some((value) => value.includes(normalizedSearch))
       const matchesRecibido = !normalizedRecibido || recepcion.recibidoDe?.toLowerCase().includes(normalizedRecibido)
-      return matchesCodigo && matchesNombre && matchesRecibido
+      return matchesSearch && matchesRecibido
     })
-  }, [normalizedCodigo, normalizedNombre, normalizedRecibido, recepcionesWithDisplay])
+  }, [normalizedRecibido, normalizedSearch, recepcionesWithDisplay])
+
+  const orderedRecepciones = useMemo(() => {
+    const sorted = [...filteredRecepciones]
+    sorted.sort((a, b) => {
+      const recibidoComparison = collator.compare(normalize(a.recibidoDe), normalize(b.recibidoDe))
+      if (recibidoComparison !== 0) return recibidoComparison
+
+      const categoriaComparison = collator.compare(normalize(a.__categoria), normalize(b.__categoria))
+      if (categoriaComparison !== 0) return categoriaComparison
+
+      return collator.compare(
+        normalize(a.__display?.descripcionMaterial ?? a.descripcionMaterial),
+        normalize(b.__display?.descripcionMaterial ?? b.descripcionMaterial)
+      )
+    })
+    return sorted
+  }, [collator, filteredRecepciones, normalize])
+  const visibleRowIds = useMemo(() => orderedRecepciones.map((recepcion) => buildRowKey(recepcion)), [buildRowKey, orderedRecepciones])
 
   useEffect(() => {
     setPage(1)
   }, [filters])
 
-  const totalPages = Math.max(1, Math.ceil(filteredRecepciones.length / pageSize))
+  useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === 0) return prev
+      const allowed = new Set(visibleRowIds)
+      let mutated = false
+      const next = new Set()
+      prev.forEach((id) => {
+        if (allowed.has(id)) {
+          next.add(id)
+        } else {
+          mutated = true
+        }
+      })
+      return mutated ? next : prev
+    })
+  }, [visibleRowIds])
+
+  const totalPages = Math.max(1, Math.ceil(orderedRecepciones.length / pageSize))
   const paginatedRecepciones = useMemo(() => {
     const start = (page - 1) * pageSize
-    return filteredRecepciones.slice(start, start + pageSize)
-  }, [filteredRecepciones, page, pageSize])
+    return orderedRecepciones.slice(start, start + pageSize)
+  }, [orderedRecepciones, page, pageSize])
+  const selectedRows = useMemo(() => {
+    if (selectedRowIds.size === 0) return []
+    const idSet = selectedRowIds
+    return orderedRecepciones.filter((recepcion) => idSet.has(buildRowKey(recepcion)))
+  }, [buildRowKey, orderedRecepciones, selectedRowIds])
 
   const hasRecepciones = recepciones.length > 0
   const showEmptyState = !loadingRecepciones && !hasRecepciones
-  const showNoMatches = !loadingRecepciones && hasRecepciones && filteredRecepciones.length === 0
+  const showNoMatches = !loadingRecepciones && hasRecepciones && orderedRecepciones.length === 0
+  const emptyColSpan = selectionMode ? 11 : 10
+  const isSelectionButtonDisabled = !recepciones.length && !selectionMode
 
   const handleFilterChange = (field, value) => {
     setFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const toggleRowSelection = (rowId) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
+  }
+
+  const handleRowClick = (event, rowId) => {
+    if (!selectionMode) return
+    const target = event.target
+    if (target instanceof Element) {
+      if (target.closest('.row-select-checkbox')) {
+        return
+      }
+      const interactive = target.closest('button, a, [role="button"], input, select, textarea, label')
+      if (interactive) {
+        return
+      }
+    }
+    event.preventDefault()
+    toggleRowSelection(rowId)
+  }
+
+  const handleToggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedRowIds(new Set())
+      }
+      return !prev
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (!orderedRecepciones.length) return
+    setSelectedRowIds(new Set(visibleRowIds))
+  }
+
+  const handleClearSelection = () => {
+    setSelectedRowIds(new Set())
+  }
+
+  const handleExportSelected = (kind) => {
+    if (selectedRows.length === 0) return
+    onExport(kind, selectedRows)
   }
 
   return (
@@ -3566,35 +3799,35 @@ function RecepcionesPage({
         <div>
           <p className="eyebrow">Recepciones</p>
           <h2>Entradas al almacén</h2>
-          <p className="muted">{filteredRecepciones.length} registros</p>
+          <p className="muted">{orderedRecepciones.length} registros</p>
         </div>
         <div className="table-header-actions">
           {loadingRecepciones && <span className="pill">Cargando…</span>}
-          <ExportMenu onExportExcel={() => onExport('recepciones-excel', filteredRecepciones)} onExportPdf={() => onExport('recepciones-pdf', filteredRecepciones)} />
+          <button
+            className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
+            type="button"
+            onClick={handleToggleSelectionMode}
+            disabled={isSelectionButtonDisabled}
+            aria-pressed={selectionMode}
+          >
+            {selectionMode ? 'Cancelar selección' : 'Seleccionar'}
+          </button>
+          <ExportMenu onExportExcel={() => onExport('recepciones-excel', orderedRecepciones)} onExportPdf={() => onExport('recepciones-pdf', orderedRecepciones)} />
           <button className="btn primary" type="button" onClick={onRequestAdd}>
             + Agregar
           </button>
         </div>
       </div>
 
-      <article className="panel-card table-card">
+      <article className={`panel-card table-card ${selectionMode ? 'selection-active' : ''}`}>
         <div className="table-search-row">
-          <label>
-            Código material
+          <label className="search-field">
+            Búsqueda rápida
             <input
               type="text"
-              value={filters.codigo}
-              onChange={(e) => handleFilterChange('codigo', e.target.value)}
-              placeholder="Buscar por código"
-            />
-          </label>
-          <label>
-            Material / categoría
-            <input
-              type="text"
-              value={filters.nombre}
-              onChange={(e) => handleFilterChange('nombre', e.target.value)}
-              placeholder="Nombre o categoría"
+              value={filters.search}
+              onChange={(e) => handleFilterChange('search', e.target.value)}
+              placeholder="Código, categoría o descripción"
             />
           </label>
           <label>
@@ -3607,10 +3840,20 @@ function RecepcionesPage({
             />
           </label>
         </div>
+        <SelectionToolbar
+          active={selectionMode}
+          selectedCount={selectedRowIds.size}
+          totalCount={orderedRecepciones.length}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+          onExportExcel={() => handleExportSelected('recepciones-excel')}
+          onExportPdf={() => handleExportSelected('recepciones-pdf')}
+        />
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
+                {selectionMode && <th className="select-column" aria-label="Seleccionar fila" />}
                 <th>#</th>
                 <th>Fecha</th>
                 <th>Código material</th>
@@ -3626,17 +3869,17 @@ function RecepcionesPage({
             <tbody>
               {loadingRecepciones && (
                 <tr>
-                  <td colSpan={10} className="empty">Cargando tabla…</td>
+                  <td colSpan={emptyColSpan} className="empty">Cargando tabla…</td>
                 </tr>
               )}
               {showEmptyState && (
                 <tr>
-                  <td colSpan={10} className="empty">Aún no hay recepciones</td>
+                  <td colSpan={emptyColSpan} className="empty">Aún no hay recepciones</td>
                 </tr>
               )}
               {showNoMatches && (
                 <tr>
-                  <td colSpan={10} className="empty">Sin coincidencias para los filtros aplicados</td>
+                  <td colSpan={emptyColSpan} className="empty">Sin coincidencias para los filtros aplicados</td>
                 </tr>
               )}
               {!loadingRecepciones && !showEmptyState && !showNoMatches && paginatedRecepciones.map((recepcion, index) => {
@@ -3647,10 +3890,28 @@ function RecepcionesPage({
                 const unidad = display.unidadMedida || recepcion.unidadMedida || '—'
                 const observationDisplay = display.observaciones ?? getObservationDisplayValue(recepcion.observaciones, recepcion.esSinRegistro)
                 const observaciones = observationDisplay || '—'
-                const absoluteIndex = filteredRecepciones.findIndex((candidate) => candidate.id === recepcion.id)
+                const absoluteIndex = orderedRecepciones.findIndex((candidate) => candidate.id === recepcion.id)
                 const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
+                const rowId = buildRowKey(recepcion)
+                const isSelected = selectedRowIds.has(rowId)
                 return (
-                  <tr key={recepcion.id}>
+                  <tr
+                    key={rowId}
+                    className={[selectionMode ? 'selectable-row' : '', isSelected ? 'row-selected' : ''].filter(Boolean).join(' ')}
+                    onClick={(event) => handleRowClick(event, rowId)}
+                    aria-selected={selectionMode ? isSelected : undefined}
+                  >
+                    {selectionMode && (
+                      <td className="select-column">
+                        <input
+                          type="checkbox"
+                          className="row-select-checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRowSelection(rowId)}
+                          aria-label={`Seleccionar recepción del ${formatDate(recepcion.fecha)}`}
+                        />
+                      </td>
+                    )}
                     <td>{rowNumber}</td>
                     <td>{formatDate(recepcion.fecha)}</td>
                     <td>{codigoMaterial}</td>
@@ -3689,12 +3950,16 @@ function EntregasPage({
   onRequestDelete,
   onExport
 }) {
-  const [filters, setFilters] = useState({ codigo: '', nombre: '', entregado: '' })
+  const [filters, setFilters] = useState({ search: '', entregado: '' })
   const [page, setPage] = useState(1)
-  const pageSize = 10
+  const pageSize = 20
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedRowIds, setSelectedRowIds] = useState(() => new Set())
+  const collator = useMemo(() => new Intl.Collator('es', { sensitivity: 'base' }), [])
+  const normalize = useCallback((value) => (value ?? '').trim(), [])
+  const buildRowKey = useCallback((row) => row.id ?? `${row.codigoMaterial ?? 'entrega'}-${row.fecha}`, [])
 
-  const normalizedCodigo = useMemo(() => filters.codigo.trim().toLowerCase(), [filters.codigo])
-  const normalizedNombre = useMemo(() => filters.nombre.trim().toLowerCase(), [filters.nombre])
+  const normalizedSearch = useMemo(() => filters.search.trim().toLowerCase(), [filters.search])
   const normalizedEntregado = useMemo(() => filters.entregado.trim().toLowerCase(), [filters.entregado])
 
   const entregasWithDisplay = useMemo(() => {
@@ -3719,29 +3984,121 @@ function EntregasPage({
       const categoria = entrega.__categoria?.toLowerCase() ?? ''
       const descripcion = entrega.__display?.descripcionMaterial?.toLowerCase() ?? ''
       const codigo = (entrega.__display?.codigoMaterial || entrega.codigoMaterial || '').toLowerCase()
-      const matchesCodigo = !normalizedCodigo || codigo.includes(normalizedCodigo)
-      const matchesNombre = !normalizedNombre || categoria.includes(normalizedNombre) || descripcion.includes(normalizedNombre)
+      const matchesSearch = !normalizedSearch || [codigo, categoria, descripcion].some((value) => value.includes(normalizedSearch))
       const matchesEntregado = !normalizedEntregado || entrega.entregadoA?.toLowerCase().includes(normalizedEntregado)
-      return matchesCodigo && matchesNombre && matchesEntregado
+      return matchesSearch && matchesEntregado
     })
-  }, [entregasWithDisplay, normalizedCodigo, normalizedEntregado, normalizedNombre])
+  }, [entregasWithDisplay, normalizedEntregado, normalizedSearch])
+
+  const orderedEntregas = useMemo(() => {
+    const sorted = [...filteredEntregas]
+    sorted.sort((a, b) => {
+      const entregadoComparison = collator.compare(normalize(a.entregadoA), normalize(b.entregadoA))
+      if (entregadoComparison !== 0) return entregadoComparison
+
+      const categoriaComparison = collator.compare(normalize(a.__categoria), normalize(b.__categoria))
+      if (categoriaComparison !== 0) return categoriaComparison
+
+      return collator.compare(
+        normalize(a.__display?.descripcionMaterial ?? a.descripcionMaterial),
+        normalize(b.__display?.descripcionMaterial ?? b.descripcionMaterial)
+      )
+    })
+    return sorted
+  }, [collator, filteredEntregas, normalize])
+  const visibleRowIds = useMemo(() => orderedEntregas.map((entrega) => buildRowKey(entrega)), [buildRowKey, orderedEntregas])
 
   useEffect(() => {
     setPage(1)
   }, [filters])
 
-  const totalPages = Math.max(1, Math.ceil(filteredEntregas.length / pageSize))
+  useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === 0) return prev
+      const allowed = new Set(visibleRowIds)
+      let mutated = false
+      const next = new Set()
+      prev.forEach((id) => {
+        if (allowed.has(id)) {
+          next.add(id)
+        } else {
+          mutated = true
+        }
+      })
+      return mutated ? next : prev
+    })
+  }, [visibleRowIds])
+
+  const totalPages = Math.max(1, Math.ceil(orderedEntregas.length / pageSize))
   const paginatedEntregas = useMemo(() => {
     const start = (page - 1) * pageSize
-    return filteredEntregas.slice(start, start + pageSize)
-  }, [filteredEntregas, page, pageSize])
+    return orderedEntregas.slice(start, start + pageSize)
+  }, [orderedEntregas, page, pageSize])
+  const selectedRows = useMemo(() => {
+    if (selectedRowIds.size === 0) return []
+    const idSet = selectedRowIds
+    return orderedEntregas.filter((entrega) => idSet.has(buildRowKey(entrega)))
+  }, [buildRowKey, orderedEntregas, selectedRowIds])
 
   const hasEntregas = entregas.length > 0
   const showEmptyState = !loadingEntregas && !hasEntregas
-  const showNoMatches = !loadingEntregas && hasEntregas && filteredEntregas.length === 0
+  const showNoMatches = !loadingEntregas && hasEntregas && orderedEntregas.length === 0
+  const emptyColSpan = selectionMode ? 11 : 10
+  const isSelectionButtonDisabled = !entregas.length && !selectionMode
 
   const handleFilterChange = (field, value) => {
     setFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const toggleRowSelection = (rowId) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
+  }
+
+  const handleRowClick = (event, rowId) => {
+    if (!selectionMode) return
+    const target = event.target
+    if (target instanceof Element) {
+      if (target.closest('.row-select-checkbox')) {
+        return
+      }
+      const interactive = target.closest('button, a, [role="button"], input, select, textarea, label')
+      if (interactive) {
+        return
+      }
+    }
+    event.preventDefault()
+    toggleRowSelection(rowId)
+  }
+
+  const handleToggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedRowIds(new Set())
+      }
+      return !prev
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (!orderedEntregas.length) return
+    setSelectedRowIds(new Set(visibleRowIds))
+  }
+
+  const handleClearSelection = () => {
+    setSelectedRowIds(new Set())
+  }
+
+  const handleExportSelected = (kind) => {
+    if (selectedRows.length === 0) return
+    onExport(kind, selectedRows)
   }
 
   return (
@@ -3750,11 +4107,20 @@ function EntregasPage({
         <div>
           <p className="eyebrow">Entregas</p>
           <h2>Despachos controlados</h2>
-          <p className="muted">{filteredEntregas.length} registros</p>
+          <p className="muted">{orderedEntregas.length} registros</p>
         </div>
         <div className="table-header-actions">
           {loadingEntregas && <span className="pill">Cargando…</span>}
-          <ExportMenu onExportExcel={() => onExport('entregas-excel', filteredEntregas)} onExportPdf={() => onExport('entregas-pdf', filteredEntregas)} />
+          <button
+            className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
+            type="button"
+            onClick={handleToggleSelectionMode}
+            disabled={isSelectionButtonDisabled}
+            aria-pressed={selectionMode}
+          >
+            {selectionMode ? 'Cancelar selección' : 'Seleccionar'}
+          </button>
+          <ExportMenu onExportExcel={() => onExport('entregas-excel', orderedEntregas)} onExportPdf={() => onExport('entregas-pdf', orderedEntregas)} />
           <button className="btn primary" type="button" onClick={onRequestAdd}>
             + Agregar
           </button>
@@ -3763,22 +4129,13 @@ function EntregasPage({
 
       <article className="panel-card table-card">
         <div className="table-search-row">
-          <label>
-            Código material
+          <label className="search-field">
+            Búsqueda rápida
             <input
               type="text"
-              value={filters.codigo}
-              onChange={(e) => handleFilterChange('codigo', e.target.value)}
-              placeholder="Buscar por código"
-            />
-          </label>
-          <label>
-            Material / categoría
-            <input
-              type="text"
-              value={filters.nombre}
-              onChange={(e) => handleFilterChange('nombre', e.target.value)}
-              placeholder="Nombre o categoría"
+              value={filters.search}
+              onChange={(e) => handleFilterChange('search', e.target.value)}
+              placeholder="Código, categoría o descripción"
             />
           </label>
           <label>
@@ -3791,10 +4148,20 @@ function EntregasPage({
             />
           </label>
         </div>
+        <SelectionToolbar
+          active={selectionMode}
+          selectedCount={selectedRowIds.size}
+          totalCount={orderedEntregas.length}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+          onExportExcel={() => handleExportSelected('entregas-excel')}
+          onExportPdf={() => handleExportSelected('entregas-pdf')}
+        />
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
+                {selectionMode && <th className="select-column" aria-label="Seleccionar fila" />}
                 <th>#</th>
                 <th>Fecha</th>
                 <th>Código material</th>
@@ -3810,17 +4177,17 @@ function EntregasPage({
             <tbody>
               {loadingEntregas && (
                 <tr>
-                  <td colSpan={10} className="empty">Cargando tabla…</td>
+                  <td colSpan={emptyColSpan} className="empty">Cargando tabla…</td>
                 </tr>
               )}
               {showEmptyState && (
                 <tr>
-                  <td colSpan={10} className="empty">Aún no hay entregas</td>
+                  <td colSpan={emptyColSpan} className="empty">Aún no hay entregas</td>
                 </tr>
               )}
               {showNoMatches && (
                 <tr>
-                  <td colSpan={10} className="empty">Sin coincidencias para los filtros aplicados</td>
+                  <td colSpan={emptyColSpan} className="empty">Sin coincidencias para los filtros aplicados</td>
                 </tr>
               )}
               {!loadingEntregas && !showEmptyState && !showNoMatches && paginatedEntregas.map((entrega, index) => {
@@ -3831,10 +4198,28 @@ function EntregasPage({
                 const unidad = display.unidadMedida || entrega.unidadMedida || '—'
                 const observationDisplay = display.observaciones ?? getObservationDisplayValue(entrega.observaciones, entrega.esSinRegistro)
                 const observaciones = observationDisplay || '—'
-                const absoluteIndex = filteredEntregas.findIndex((candidate) => candidate.id === entrega.id)
+                const absoluteIndex = orderedEntregas.findIndex((candidate) => candidate.id === entrega.id)
                 const rowNumber = absoluteIndex >= 0 ? absoluteIndex + 1 : index + 1 + (page - 1) * pageSize
+                const rowId = buildRowKey(entrega)
+                const isSelected = selectedRowIds.has(rowId)
                 return (
-                  <tr key={entrega.id}>
+                  <tr
+                    key={rowId}
+                    className={[selectionMode ? 'selectable-row' : '', isSelected ? 'row-selected' : ''].filter(Boolean).join(' ')}
+                    onClick={(event) => handleRowClick(event, rowId)}
+                    aria-selected={selectionMode ? isSelected : undefined}
+                  >
+                    {selectionMode && (
+                      <td className="select-column">
+                        <input
+                          type="checkbox"
+                          className="row-select-checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRowSelection(rowId)}
+                          aria-label={`Seleccionar entrega del ${formatDate(entrega.fecha)}`}
+                        />
+                      </td>
+                    )}
                     <td>{rowNumber}</td>
                     <td>{formatDate(entrega.fecha)}</td>
                     <td>{codigoMaterial}</td>
@@ -3923,7 +4308,7 @@ function ItemAutocompleteField({
     const match = selectedItem ?? items.find((item) => item.codigoMaterial === value)
     if (match) {
       setManualQuery(false)
-      setQuery(`${match.codigoMaterial} · ${match.descripcionMaterial}`)
+      setQuery(buildItemOptionLabel(match))
     }
   }, [items, manualQuery, selectedItem, value])
 
@@ -3946,7 +4331,7 @@ function ItemAutocompleteField({
     onSelect?.(item ?? null)
     if (item) {
       setManualQuery(false)
-      setQuery(`${item.codigoMaterial} · ${item.descripcionMaterial}`)
+      setQuery(buildItemOptionLabel(item))
     } else {
       setQuery('')
     }
@@ -4011,9 +4396,7 @@ function ItemAutocompleteField({
     onSelect?.(null)
   }
 
-  const helperMessage = helper ?? (selectedItem
-    ? `Stock actual: ${formatDecimal(Number(selectedItem.cantidadStock) || 0)} ${selectedItem.unidadMedida ?? ''}`
-    : 'Escribe para ver sugerencias y confirma con Enter.')
+  const helperMessage = helper ?? buildItemSelectionHelper(selectedItem)
   const showDropdown = dropdownOpen && !disabled
   const showError = dirty && Boolean(error)
   const rootClass = ['form-field', 'autocomplete-field', full ? 'full' : ''].filter(Boolean).join(' ')
@@ -4085,7 +4468,10 @@ function ItemAutocompleteField({
                       {item.descripcionMaterial}
                       <small>{item.nombreMaterial}</small>
                     </span>
-                    <span className="suggestion-meta">Stock: {formatDecimal(item.cantidadStock)}</span>
+                    <span className="suggestion-meta">
+                      {item.localizacion ? `${item.localizacion} · ` : ''}
+                      Stock: {formatDecimal(item.cantidadStock)}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -4164,8 +4550,7 @@ function KardexPage({
 
   const handleSuggestionSelect = (item) => {
     if (!item) return
-    const labelParts = [item.codigoMaterial, item.descripcionMaterial].filter(Boolean)
-    setSearchTerm(labelParts.join(' · ') || '')
+    setSearchTerm(buildItemOptionLabel(item))
     onSelectItem?.(item)
   }
 
@@ -4307,7 +4692,10 @@ function KardexPage({
                       {item.descripcionMaterial}
                       <small>{item.nombreMaterial}</small>
                     </span>
-                    <span className="suggestion-meta">Stock: {formatDecimal(item.cantidadStock)}</span>
+                    <span className="suggestion-meta">
+                      {item.localizacion ? `${item.localizacion} · ` : ''}
+                      Stock: {formatDecimal(item.cantidadStock)}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -4328,7 +4716,7 @@ function KardexPage({
               {recentList.map((item) => (
                 <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item)}>
                   <span className="chip-title">{item.descripcionMaterial}</span>
-                  <small>{item.nombreMaterial}</small>
+                  <small>{[item.nombreMaterial, item.localizacion].filter(Boolean).join(' · ')}</small>
                 </button>
               ))}
             </div>
@@ -4345,7 +4733,7 @@ function KardexPage({
               {popularList.map((item) => (
                 <button key={item.id ?? item.codigoMaterial} type="button" className="chip" onClick={() => onSelectItem?.(item)}>
                   <span className="chip-title">{item.descripcionMaterial}</span>
-                  <small>{item.nombreMaterial}</small>
+                  <small>{[item.nombreMaterial, item.localizacion].filter(Boolean).join(' · ')}</small>
                 </button>
               ))}
             </div>
@@ -4499,6 +4887,14 @@ function ReportesPage({
   manualAdjustments = []
 }) {
   const rows = Array.isArray(reporte) ? reporte : []
+  const [tableFilters, setTableFilters] = useState({ search: '', unidad: 'all', localizacion: 'all' })
+  const [page, setPage] = useState(1)
+  const pageSize = 20
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedRowIds, setSelectedRowIds] = useState(() => new Set())
+  const collator = useMemo(() => new Intl.Collator('es', { sensitivity: 'base' }), [])
+  const normalize = useCallback((value) => (value ?? '').trim(), [])
+  const buildRowKey = useCallback((row) => row.itemId ?? `${row.codigoMaterial ?? 'sin-codigo'}-${row.nombreMaterial ?? row.descripcionMaterial ?? 'registro'}`, [])
   const resolvedRows = useMemo(() => {
     const byCodigo = itemsByCodigo ?? {}
     const byId = itemsById ?? {}
@@ -4513,6 +4909,7 @@ function ReportesPage({
         codigoMaterial: row.codigoMaterial ?? linkedItem?.codigoMaterial ?? '—',
         nombreMaterial: row.nombreMaterial ?? linkedItem?.nombreMaterial ?? '—',
         descripcionMaterial: row.descripcionMaterial ?? linkedItem?.descripcionMaterial ?? '—',
+        localizacion: row.localizacion ?? linkedItem?.localizacion ?? '—',
         unidadMedida: row.unidadMedida ?? linkedItem?.unidadMedida ?? '—',
         stockDespuesBalance: Number(row.stockDespuesBalance ?? linkedItem?.cantidadStock ?? 0),
         totalEntradasSinRegistro: Number(row.totalEntradasSinRegistro) || 0,
@@ -4520,6 +4917,138 @@ function ReportesPage({
       }
     })
   }, [itemsByCodigo, itemsById, rows])
+  const normalizedSearch = useMemo(() => tableFilters.search.trim().toLowerCase(), [tableFilters.search])
+  const normalizedUnidad = useMemo(() => (tableFilters.unidad === 'all' ? 'all' : tableFilters.unidad.trim().toLowerCase()), [tableFilters.unidad])
+  const normalizedLocalizacion = useMemo(() => (tableFilters.localizacion === 'all' ? 'all' : tableFilters.localizacion.trim().toLowerCase()), [tableFilters.localizacion])
+  const unidadOptions = useMemo(() => {
+    const values = resolvedRows.map((row) => row.unidadMedida).filter(Boolean)
+    return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+  }, [resolvedRows])
+  const localizacionOptions = useMemo(() => {
+    const values = resolvedRows.map((row) => row.localizacion).filter(Boolean)
+    return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+  }, [resolvedRows])
+
+  const filteredReportRows = useMemo(() => {
+    const candidateRows = hideZeroRows
+      ? resolvedRows.filter((row) => {
+        const entradas = Number(row.totalEntradas) || 0
+        const salidas = Number(row.totalSalidas) || 0
+        const entradasSr = Number(row.totalEntradasSinRegistro) || 0
+        const salidasSr = Number(row.totalSalidasSinRegistro) || 0
+        return entradas !== 0 || salidas !== 0 || entradasSr !== 0 || salidasSr !== 0
+      })
+      : resolvedRows
+    return candidateRows.filter((row) => {
+      const haystack = [row.codigoMaterial ?? '', row.descripcionMaterial ?? '', row.nombreMaterial ?? '', row.localizacion ?? '']
+      const matchesSearch = !normalizedSearch || haystack.some((value) => value.toLowerCase().includes(normalizedSearch))
+      const unidadValue = (row.unidadMedida ?? '').toLowerCase()
+      const localizacionValue = (row.localizacion ?? '').toLowerCase()
+      const matchesUnidad = normalizedUnidad === 'all' || unidadValue === normalizedUnidad
+      const matchesLocalizacion = normalizedLocalizacion === 'all' || localizacionValue === normalizedLocalizacion
+      return matchesSearch && matchesUnidad && matchesLocalizacion
+    })
+  }, [hideZeroRows, normalizedLocalizacion, normalizedSearch, normalizedUnidad, resolvedRows])
+  const orderedReportRows = useMemo(() => {
+    const sorted = [...filteredReportRows]
+    sorted.sort((a, b) => {
+      const categoryComparison = collator.compare(normalize(a.nombreMaterial), normalize(b.nombreMaterial))
+      if (categoryComparison !== 0) return categoryComparison
+
+      const codeComparison = collator.compare(normalize(a.codigoMaterial), normalize(b.codigoMaterial))
+      if (codeComparison !== 0) return codeComparison
+
+      return collator.compare(normalize(a.descripcionMaterial), normalize(b.descripcionMaterial))
+    })
+    return sorted
+  }, [collator, filteredReportRows, normalize])
+  useEffect(() => {
+    setPage(1)
+  }, [filter.from, filter.to, hideZeroRows, tableFilters.localizacion, tableFilters.search, tableFilters.unidad])
+  const visibleRowIds = useMemo(() => orderedReportRows.map((row) => buildRowKey(row)), [buildRowKey, orderedReportRows])
+  useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === 0) return prev
+      const allowed = new Set(visibleRowIds)
+      let mutated = false
+      const next = new Set()
+      prev.forEach((id) => {
+        if (allowed.has(id)) {
+          next.add(id)
+        } else {
+          mutated = true
+        }
+      })
+      return mutated ? next : prev
+    })
+  }, [visibleRowIds])
+  const selectedRows = useMemo(() => {
+    if (selectedRowIds.size === 0) return []
+    const idSet = selectedRowIds
+    return orderedReportRows.filter((row) => idSet.has(buildRowKey(row)))
+  }, [buildRowKey, orderedReportRows, selectedRowIds])
+  const totalPages = Math.max(1, Math.ceil(orderedReportRows.length / pageSize))
+  const paginatedReportRows = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return orderedReportRows.slice(start, start + pageSize)
+  }, [orderedReportRows, page, pageSize])
+  const emptyColSpan = selectionMode ? 10 : 9
+  const isSelectionButtonDisabled = !orderedReportRows.length && !selectionMode
+
+  const handleTableFilterChange = (field, value) => {
+    setTableFilters((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const toggleRowSelection = (rowId) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
+  }
+
+  const handleRowClick = (event, rowId) => {
+    if (!selectionMode) return
+    const target = event.target
+    if (target instanceof Element) {
+      if (target.closest('.row-select-checkbox')) {
+        return
+      }
+      const interactive = target.closest('button, a, [role="button"], input, select, textarea, label')
+      if (interactive) {
+        return
+      }
+    }
+    event.preventDefault()
+    toggleRowSelection(rowId)
+  }
+
+  const handleToggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedRowIds(new Set())
+      }
+      return !prev
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (!orderedReportRows.length) return
+    setSelectedRowIds(new Set(visibleRowIds))
+  }
+
+  const handleClearSelection = () => {
+    setSelectedRowIds(new Set())
+  }
+
+  const handleExportSelected = (kind) => {
+    if (selectedRows.length === 0) return
+    onExport(kind, selectedRows)
+  }
   const formatAdjustmentDate = (value) => {
     if (!value) return '—'
     const parsed = new Date(value)
@@ -4647,16 +5176,64 @@ function ReportesPage({
           </div>
           <div className="panel-actions">
             {loading && <span className="pill">Cargando…</span>}
+            <button
+              className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
+              type="button"
+              onClick={handleToggleSelectionMode}
+              disabled={isSelectionButtonDisabled}
+              aria-pressed={selectionMode}
+            >
+              {selectionMode ? 'Cancelar selección' : 'Seleccionar'}
+            </button>
             <ExportMenu
-              onExportExcel={() => onExport('reportes-excel', resolvedRows)}
-              onExportPdf={() => onExport('reportes-pdf', resolvedRows)}
+              onExportExcel={() => onExport('reportes-excel', orderedReportRows)}
+              onExportPdf={() => onExport('reportes-pdf', orderedReportRows)}
             />
           </div>
         </div>
+        <div className="table-search-row">
+          <label className="search-field">
+            Búsqueda rápida
+            <input
+              type="text"
+              value={tableFilters.search}
+              onChange={(e) => handleTableFilterChange('search', e.target.value)}
+              placeholder="Código, categoría o ubicación"
+            />
+          </label>
+          <label>
+            Unidad
+            <select value={tableFilters.unidad} onChange={(e) => handleTableFilterChange('unidad', e.target.value)}>
+              <option value="all">Todas</option>
+              {unidadOptions.map((unidad) => (
+                <option key={unidad} value={unidad}>{unidad}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Localización
+            <select value={tableFilters.localizacion} onChange={(e) => handleTableFilterChange('localizacion', e.target.value)}>
+              <option value="all">Cualquiera</option>
+              {localizacionOptions.map((loc) => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <SelectionToolbar
+          active={selectionMode}
+          selectedCount={selectedRowIds.size}
+          totalCount={orderedReportRows.length}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+          onExportExcel={() => handleExportSelected('reportes-excel')}
+          onExportPdf={() => handleExportSelected('reportes-pdf')}
+        />
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
+                {selectionMode && <th className="select-column" aria-label="Seleccionar fila" />}
                 <th>Código material</th>
                 <th>Nombre del item</th>
                 <th>Categoría</th>
@@ -4664,25 +5241,43 @@ function ReportesPage({
                 <th>Salidas</th>
                 <th>Balance</th>
                 <th className="text-center">Stock después del balance</th>
+                <th>Localización</th>
                 <th>Unidad</th>
               </tr>
             </thead>
             <tbody>
-              {resolvedRows.length === 0 && !loading && (
+              {orderedReportRows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={8} className="empty">Sin datos para el periodo seleccionado</td>
+                  <td colSpan={emptyColSpan} className="empty">Sin datos para el periodo seleccionado</td>
                 </tr>
               )}
-              {resolvedRows.map((row, index) => {
+              {paginatedReportRows.map((row, index) => {
                 const totalEntradas = Number(row.totalEntradas) || 0
                 const totalSalidas = Number(row.totalSalidas) || 0
                 const totalEntradasSr = Number(row.totalEntradasSinRegistro) || 0
                 const totalSalidasSr = Number(row.totalSalidasSinRegistro) || 0
                 const balance = totalEntradas - totalSalidas
                 const stockDespues = Number(row.stockDespuesBalance) || 0
-                const rowKey = row.itemId || `${row.codigoMaterial}-${index}`
+                const rowKey = buildRowKey(row)
+                const isSelected = selectedRowIds.has(rowKey)
                 return (
-                  <tr key={rowKey}>
+                  <tr
+                    key={rowKey}
+                    className={[selectionMode ? 'selectable-row' : '', isSelected ? 'row-selected' : ''].filter(Boolean).join(' ')}
+                    onClick={(event) => handleRowClick(event, rowKey)}
+                    aria-selected={selectionMode ? isSelected : undefined}
+                  >
+                    {selectionMode && (
+                      <td className="select-column">
+                        <input
+                          type="checkbox"
+                          className="row-select-checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRowSelection(rowKey)}
+                          aria-label={`Seleccionar ${row.descripcionMaterial ?? row.codigoMaterial}`}
+                        />
+                      </td>
+                    )}
                     <td className="cell-code">{row.codigoMaterial}</td>
                     <td className="text-wrap">{row.descripcionMaterial ?? '—'}</td>
                     <td>{row.nombreMaterial ?? '—'}</td>
@@ -4700,6 +5295,7 @@ function ReportesPage({
                     </td>
                     <td>{formatDecimal(balance)}</td>
                     <td className="text-center">{formatDecimal(stockDespues)}</td>
+                    <td>{row.localizacion ?? '—'}</td>
                     <td>{row.unidadMedida}</td>
                   </tr>
                 )
@@ -4707,6 +5303,7 @@ function ReportesPage({
             </tbody>
           </table>
         </div>
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </article>
 
       <article className="panel-card manual-adjustments-card">
@@ -4802,6 +5399,46 @@ function Pagination({ page, totalPages, onChange }) {
       <button type="button" className="btn ghost" onClick={() => goTo(page + 1)} disabled={!canGoForward}>
         Siguiente →
       </button>
+    </div>
+  )
+}
+
+function SelectionToolbar({
+  active,
+  selectedCount,
+  totalCount,
+  onSelectAll,
+  onClearSelection,
+  onExportExcel,
+  onExportPdf
+}) {
+  if (!active) return null
+  const hasSelection = selectedCount > 0
+  const summary = hasSelection
+    ? `${selectedCount} registro${selectedCount === 1 ? '' : 's'} seleccionados`
+    : 'Sin registros seleccionados'
+
+  return (
+    <div className="selection-toolbar" role="status" aria-live="polite">
+      <div className="selection-toolbar-left">
+        <p className="selection-summary">{summary}</p>
+        <div className="selection-toolbar-buttons">
+          <button type="button" className="btn ghost compact" onClick={onSelectAll} disabled={totalCount === 0}>
+            Seleccionar todos
+          </button>
+          <button type="button" className="btn ghost compact" onClick={onClearSelection} disabled={!hasSelection}>
+            Deseleccionar todos
+          </button>
+        </div>
+      </div>
+      <div className="selection-toolbar-right">
+        <button type="button" className="btn outline compact" onClick={onExportExcel} disabled={!hasSelection}>
+          Generar Excel
+        </button>
+        <button type="button" className="btn outline compact" onClick={onExportPdf} disabled={!hasSelection}>
+          Generar PDF
+        </button>
+      </div>
     </div>
   )
 }
