@@ -790,6 +790,12 @@ export default function App() {
   const [stockAdjustmentPrompt, setStockAdjustmentPrompt] = useState({ open: false, intent: null })
   const [stockPromptSubmitting, setStockPromptSubmitting] = useState(false)
   const [manualAdjustments, setManualAdjustments] = useState([])
+  const [duplicateCodePrompt, setDuplicateCodePrompt] = useState({
+    open: false,
+    code: '',
+    conflictItem: null,
+    pendingOptions: null
+  })
 
   const isAuthenticated = Boolean(token)
 
@@ -1125,11 +1131,30 @@ export default function App() {
   const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsByCodigo), [entregaForm, itemsByCodigo])
 
   const sortedItems = useMemo(() => {
+    const collator = new Intl.Collator('es', { sensitivity: 'base' })
+    const normalize = (value) => (value ?? '').trim()
+
     return [...items].sort((a, b) => {
-      const labelA = (a.descripcionMaterial ?? '').toLowerCase()
-      const labelB = (b.descripcionMaterial ?? '').toLowerCase()
-      if (labelA === labelB) return 0
-      return labelA > labelB ? 1 : -1
+      const categoriaComparison = collator.compare(
+        normalize(a?.nombreMaterial),
+        normalize(b?.nombreMaterial)
+      )
+      if (categoriaComparison !== 0) {
+        return categoriaComparison
+      }
+
+      const ubicacionComparison = collator.compare(
+        normalize(a?.localizacion),
+        normalize(b?.localizacion)
+      )
+      if (ubicacionComparison !== 0) {
+        return ubicacionComparison
+      }
+
+      return collator.compare(
+        normalize(a?.descripcionMaterial),
+        normalize(b?.descripcionMaterial)
+      )
     })
   }, [items])
 
@@ -1595,7 +1620,7 @@ export default function App() {
     if (event?.preventDefault) {
       event.preventDefault()
     }
-    const { force = false, movementIntent = null } = options
+    const { force = false, movementIntent = null, skipDuplicateCheck = false } = options
     setItemFormDirty(true)
     const validation = itemValidation
     if (!validation.isValid) {
@@ -1607,6 +1632,33 @@ export default function App() {
     const originalStock = Number.isFinite(itemModalState.originalStock)
       ? Number(itemModalState.originalStock)
       : null
+    const normalizedCode = (itemForm.codigoMaterial ?? '').trim().toUpperCase()
+
+    if (!skipDuplicateCheck && normalizedCode) {
+      const conflict = (Array.isArray(items) ? items : []).find((candidate) => {
+        if (!candidate?.codigoMaterial) return false
+        const candidateCode = candidate.codigoMaterial.trim().toUpperCase()
+        if (!candidateCode) return false
+        if (isEditMode && candidate.id === itemModalState.id) return false
+        return candidateCode === normalizedCode
+      })
+
+      if (conflict) {
+        setDuplicateCodePrompt({
+          open: true,
+          code: itemForm.codigoMaterial,
+          conflictItem: conflict,
+          pendingOptions: {
+            ...options,
+            force,
+            movementIntent,
+            skipDuplicateCheck: true
+          }
+        })
+        return false
+      }
+    }
+
     const stockDelta = isEditMode && originalStock !== null
       ? Number((validation.quantity - originalStock).toFixed(2))
       : 0
@@ -1676,6 +1728,23 @@ export default function App() {
     }
     return success
   }
+
+  const dismissDuplicateCodePrompt = useCallback(() => {
+    setDuplicateCodePrompt({
+      open: false,
+      code: '',
+      conflictItem: null,
+      pendingOptions: null
+    })
+  }, [])
+
+  const confirmDuplicateCodePrompt = useCallback(async () => {
+    const pendingOptions = duplicateCodePrompt.pendingOptions
+    dismissDuplicateCodePrompt()
+    if (pendingOptions) {
+      await submitItem(null, pendingOptions)
+    }
+  }, [dismissDuplicateCodePrompt, duplicateCodePrompt.pendingOptions, submitItem])
 
   const submitCategoria = async (event) => {
     event?.preventDefault?.()
@@ -1929,6 +1998,15 @@ export default function App() {
 
   const heroIsSyncing = loading.items || loading.recepciones || loading.entregas
   const headerDisplayName = authUser?.nombre?.trim() || authUser?.nombreUsuario || 'operador'
+  const duplicateConflictItem = duplicateCodePrompt.conflictItem
+  const duplicateConflictName = duplicateConflictItem?.descripcionMaterial?.trim()
+    || duplicateConflictItem?.nombreMaterial?.trim()
+    || duplicateConflictItem?.codigoMaterial?.trim()
+    || 'otro item del inventario'
+  const duplicateConflictLocation = duplicateConflictItem?.localizacion?.trim() || ''
+  const duplicateConflictDetails = duplicateConflictItem
+    ? `Coincide con "${duplicateConflictName}"${duplicateConflictLocation ? ` en ${duplicateConflictLocation}` : ''}.`
+    : 'Otro item ya usa este código.'
 
   const handleExport = useCallback((kind, rows, extra = {}) => {
     const map = {
@@ -2578,6 +2656,20 @@ export default function App() {
             </label>
           </div>
         </FormModal>
+
+        <ConfirmModal
+          isOpen={duplicateCodePrompt.open}
+          title="Código duplicado detectado"
+          message={`Ya existe un item con el código ${(duplicateCodePrompt.code ?? '').trim() || 'ingresado'}.`}
+          details={duplicateConflictDetails}
+          onCancel={dismissDuplicateCodePrompt}
+          onConfirm={confirmDuplicateCodePrompt}
+          loading={saving.item}
+          confirmLabel="Guardar de todas formas"
+          confirmLoadingLabel="Guardando…"
+          confirmKind="primary"
+          hint="Cancela para corregirlo o confirma si necesitas repetir el código."
+        />
 
         <ConfirmModal
           isOpen={confirmState.open}
@@ -4670,7 +4762,10 @@ function ConfirmModal({
   requireMatch = false,
   matchValue = '',
   matchLabel = '',
-  hint = ''
+  hint = '',
+  confirmLabel = 'Eliminar',
+  confirmLoadingLabel = 'Eliminando…',
+  confirmKind = 'danger'
 }) {
   const [typedValue, setTypedValue] = useState('')
 
@@ -4720,8 +4815,8 @@ function ConfirmModal({
           <button type="button" className="btn ghost" onClick={onCancel} disabled={loading}>
             Cancelar
           </button>
-          <button type="button" className="btn danger" onClick={onConfirm} disabled={confirmDisabled}>
-            {loading ? 'Eliminando…' : 'Eliminar'}
+          <button type="button" className={`btn ${confirmKind}`} onClick={onConfirm} disabled={confirmDisabled}>
+            {loading ? confirmLoadingLabel : confirmLabel}
           </button>
         </div>
       </div>
