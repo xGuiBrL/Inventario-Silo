@@ -383,7 +383,7 @@ const CODE_REGEX = /^[A-Z0-9-]+$/
 const CODE_WITH_SPACES_REGEX = /^[A-Z0-9- ]+$/
 const PLAIN_TEXT_REGEX = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]+$/
 const CATEGORY_PALETTE = ['#0f766e', '#2563eb', '#f97316', '#0ea5e9', '#dc2626', '#059669', '#f59e0b']
-const UNIT_OPTIONS = Object.freeze(['Lt', 'Kg', 'Mts', 'Und'])
+const UNIT_OPTIONS = Object.freeze(['Lt', 'Kg', 'Mts', 'Und', 'QQ', 'Pqtes', 'Pzas', 'Mt2', 'Mt3'])
 const UNIT_LOOKUP = UNIT_OPTIONS.reduce((acc, option) => {
   acc[option.toUpperCase()] = option
   return acc
