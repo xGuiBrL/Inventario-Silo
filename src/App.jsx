@@ -420,12 +420,12 @@ const titleCase = (value) => value
   .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
   .join(' ')
 
-const sanitizePlainText = (value, maxLength, { titleCaseEnabled = false, preserveTrailingSpace = false } = {}) => {
+const sanitizePlainText = (value, maxLength, { titleCaseEnabled = false, preserveTrailingSpace = false, allowAnyChar = false } = {}) => {
   if (!value) return ''
   const hadTrailingSpace = preserveTrailingSpace && /\s$/.test(value)
   let normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim()
-  if (!PLAIN_TEXT_REGEX.test(normalized)) {
-    normalized = normalized.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()/\'\-\s]/g, '')
+  if (!allowAnyChar && !PLAIN_TEXT_REGEX.test(normalized)) {
+    normalized = normalized.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()/\\'-\s]/g, '')
   }
   normalized = normalized.slice(0, maxLength)
   if (titleCaseEnabled && normalized) {
@@ -971,7 +971,7 @@ export default function App() {
         categoriaId: item.categoriaId ?? '',
         ubicacionId: item.ubicacionId ?? '',
         codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-        descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial, { allowAnyChar: true }),
         cantidadStock: sanitizeDecimalInput(String(item.cantidadStock ?? ''), QUANTITY_LIMITS.stock),
         unidadMedida: ensureUnitValue(item.unidadMedida, '')
       })
@@ -1034,10 +1034,10 @@ export default function App() {
         itemId: record.itemId ?? '',
         recibidoDe: sanitizePlainText(record.recibidoDe ?? '', TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial, { allowAnyChar: true }),
         cantidadRecibida: sanitizeDecimalInput(String(record.cantidadRecibida ?? '')),
         unidadMedida: ensureUnitValue(record.unidadMedida, ''),
-        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones)
+        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones, { allowAnyChar: true })
       })
       setRecepcionModalState({ open: true, mode: 'edit', id: record.id ?? '' })
       setRecepcionFormDirty(false)
@@ -1060,10 +1060,10 @@ export default function App() {
         itemId: record.itemId ?? '',
         entregadoA: sanitizePlainText(record.entregadoA ?? '', TEXT_LIMITS.entregadoA, { titleCaseEnabled: true }),
         codigoMaterial: sanitizeCodeInput(record.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+        descripcionMaterial: sanitizePlainText(record.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial, { allowAnyChar: true }),
         cantidadEntregada: sanitizeDecimalInput(String(record.cantidadEntregada ?? '')),
         unidadMedida: ensureUnitValue(record.unidadMedida, ''),
-        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones)
+        observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones, { allowAnyChar: true })
       })
       const normalizedCodigo = record.codigoMaterial ? record.codigoMaterial.trim().toUpperCase() : ''
       setEntregaModalState({
@@ -1601,7 +1601,7 @@ export default function App() {
 
     const sanitizers = {
       codigoMaterial: (input) => sanitizeCodeInput(input, TEXT_LIMITS.codigoMaterial, { allowSpaces: true, preserveTrailingSpace: true }),
-      descripcionMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.descripcionMaterial, { preserveTrailingSpace: true }),
+      descripcionMaterial: (input) => sanitizePlainText(input, TEXT_LIMITS.descripcionMaterial, { preserveTrailingSpace: true, allowAnyChar: true }),
       cantidadStock: (input) => sanitizeDecimalInput(input, QUANTITY_LIMITS.stock)
     }
     const sanitizer = sanitizers[field] ?? ((input) => input)
@@ -1634,7 +1634,7 @@ export default function App() {
     const sanitizers = {
       recibidoDe: (input) => sanitizePlainText(input, TEXT_LIMITS.recibidoDe, { titleCaseEnabled: true, preserveTrailingSpace: true }),
       cantidadRecibida: (input) => sanitizeDecimalInput(input),
-      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true, allowAnyChar: true })
     }
     const sanitizer = sanitizers[field] ?? ((input) => input)
     const sanitizedValue = sanitizer(value)
@@ -1659,7 +1659,7 @@ export default function App() {
       ...prev,
       itemId: item.id ?? '',
       codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial, { allowAnyChar: true }),
       unidadMedida: ensureUnitValue(item.unidadMedida, '')
     }))
   }
@@ -1668,7 +1668,7 @@ export default function App() {
     const sanitizers = {
       entregadoA: (input) => sanitizePlainText(input, TEXT_LIMITS.entregadoA, { titleCaseEnabled: true, preserveTrailingSpace: true }),
       cantidadEntregada: (input) => sanitizeDecimalInput(input),
-      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+      observaciones: (input) => sanitizeOptionalText(input, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true, allowAnyChar: true })
     }
     const sanitizer = sanitizers[field] ?? ((input) => input)
     const sanitizedValue = sanitizer(value)
@@ -1693,7 +1693,7 @@ export default function App() {
       ...prev,
       itemId: item.id ?? '',
       codigoMaterial: sanitizeCodeInput(item.codigoMaterial ?? '', TEXT_LIMITS.codigoMaterial, { allowSpaces: true }),
-      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial),
+      descripcionMaterial: sanitizePlainText(item.descripcionMaterial ?? '', TEXT_LIMITS.descripcionMaterial, { allowAnyChar: true }),
       unidadMedida: ensureUnitValue(item.unidadMedida, '')
     }))
   }
@@ -1714,7 +1714,7 @@ export default function App() {
 
     const defaultNote = 'Ajuste de stock registrado desde la edición del item.'
     const rawNote = intent.quickForm?.observaciones ?? defaultNote
-    const observaciones = sanitizeOptionalText(rawNote, TEXT_LIMITS.observaciones)
+    const observaciones = sanitizeOptionalText(rawNote, TEXT_LIMITS.observaciones, { allowAnyChar: true })
 
     if (intent.type === 'recepcion') {
       const rawCounterpart = intent.quickForm?.contraparte || 'Ajuste automatizado'
@@ -1989,7 +1989,7 @@ export default function App() {
       quickForm: {
         cantidad: sanitizeDecimalInput(formData.cantidad ?? ''),
         contraparte: sanitizePlainText(formData.contraparte ?? '', counterpartLimit, { titleCaseEnabled: true, preserveTrailingSpace: true }),
-        observaciones: sanitizeOptionalText(formData.observaciones ?? '', TEXT_LIMITS.observaciones, { preserveTrailingSpace: true })
+        observaciones: sanitizeOptionalText(formData.observaciones ?? '', TEXT_LIMITS.observaciones, { preserveTrailingSpace: true, allowAnyChar: true })
       }
     }
     setStockPromptSubmitting(true)
@@ -5640,7 +5640,7 @@ function StockAdjustmentPrompt({ prompt, onSubmitMovement, onSkip, onCancel, sub
     if (field === 'cantidad') {
       setFormState((prev) => ({ ...prev, cantidad: sanitizeDecimalInput(value, QUANTITY_LIMITS.movement) }))
     } else if (field === 'observaciones') {
-      setFormState((prev) => ({ ...prev, observaciones: sanitizeOptionalText(value, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true }) }))
+      setFormState((prev) => ({ ...prev, observaciones: sanitizeOptionalText(value, TEXT_LIMITS.observaciones, { preserveTrailingSpace: true, allowAnyChar: true }) }))
     } else {
       const limit = type === 'entrega' ? TEXT_LIMITS.entregadoA : TEXT_LIMITS.recibidoDe
       setFormState((prev) => ({ ...prev, contraparte: sanitizePlainText(value, limit, { titleCaseEnabled: true, preserveTrailingSpace: true }) }))
