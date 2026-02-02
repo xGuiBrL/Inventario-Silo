@@ -585,11 +585,22 @@ const validateRecepcionForm = (form, itemsById) => {
   }
 }
 
-const validateEntregaForm = (form, itemsById) => {
+const validateEntregaForm = (form, itemsById, options = {}) => {
   const errors = {}
   const quantityValue = parseDecimalInput(form.cantidadEntregada)
   const selectedItem = form.itemId ? itemsById[form.itemId] : null
-  const availableStock = selectedItem ? Number(selectedItem.cantidadStock ?? 0) : null
+  const baseStock = selectedItem ? Number(selectedItem.cantidadStock ?? 0) : null
+  const originalItemId = options?.originalItemId ? String(options.originalItemId).trim() : ''
+  const originalCodigo = options?.originalCodigo ? String(options.originalCodigo).trim().toUpperCase() : ''
+  const originalQuantity = Number(options?.originalQuantity ?? 0) || 0
+  const selectedCodigo = selectedItem?.codigoMaterial?.trim().toUpperCase() ?? ''
+  const isOriginalItem = Boolean(selectedItem) && (
+    (originalItemId && selectedItem.id === originalItemId) ||
+    (!originalItemId && originalCodigo && selectedCodigo === originalCodigo)
+  )
+  const availableStock = baseStock === null
+    ? null
+    : baseStock + (isOriginalItem ? originalQuantity : 0)
 
   if (!selectedItem) {
     errors.codigoMaterial = 'Selecciona un item con stock.'
@@ -788,7 +799,14 @@ export default function App() {
   const [categoriaModalState, setCategoriaModalState] = useState({ open: false, mode: 'create', id: '' })
   const [ubicacionModalState, setUbicacionModalState] = useState({ open: false, mode: 'create', id: '' })
   const [recepcionModalState, setRecepcionModalState] = useState({ open: false, mode: 'create', id: '' })
-  const [entregaModalState, setEntregaModalState] = useState({ open: false, mode: 'create', id: '' })
+  const [entregaModalState, setEntregaModalState] = useState({
+    open: false,
+    mode: 'create',
+    id: '',
+    originalItemId: '',
+    originalCodigo: '',
+    originalQuantity: 0
+  })
   const [confirmState, setConfirmState] = useState({
     open: false,
     resource: '',
@@ -1047,17 +1065,39 @@ export default function App() {
         unidadMedida: ensureUnitValue(record.unidadMedida, ''),
         observaciones: sanitizeOptionalText(observationValue, TEXT_LIMITS.observaciones)
       })
-      setEntregaModalState({ open: true, mode: 'edit', id: record.id ?? '' })
+      const normalizedCodigo = record.codigoMaterial ? record.codigoMaterial.trim().toUpperCase() : ''
+      setEntregaModalState({
+        open: true,
+        mode: 'edit',
+        id: record.id ?? '',
+        originalItemId: record.itemId ?? '',
+        originalCodigo: normalizedCodigo,
+        originalQuantity: Number(record.cantidadEntregada ?? 0) || 0
+      })
       setEntregaFormDirty(false)
     } else {
       resetEntregaForm(overrides ?? {})
-      setEntregaModalState({ open: true, mode: 'create', id: '' })
+      setEntregaModalState({
+        open: true,
+        mode: 'create',
+        id: '',
+        originalItemId: '',
+        originalCodigo: '',
+        originalQuantity: 0
+      })
       setEntregaFormDirty(false)
     }
   }, [resetEntregaForm])
 
   const closeEntregaModal = useCallback(() => {
-    setEntregaModalState({ open: false, mode: 'create', id: '' })
+    setEntregaModalState({
+      open: false,
+      mode: 'create',
+      id: '',
+      originalItemId: '',
+      originalCodigo: '',
+      originalQuantity: 0
+    })
     resetEntregaForm()
   }, [resetEntregaForm])
 
@@ -1175,7 +1215,23 @@ export default function App() {
   const categoriaValidation = useMemo(() => validateCategoriaForm(categoriaForm), [categoriaForm])
   const ubicacionValidation = useMemo(() => validateUbicacionForm(ubicacionForm), [ubicacionForm])
   const recepcionValidation = useMemo(() => validateRecepcionForm(recepcionForm, itemsById), [recepcionForm, itemsById])
-  const entregaValidation = useMemo(() => validateEntregaForm(entregaForm, itemsById), [entregaForm, itemsById])
+  const entregaValidation = useMemo(() => {
+    const originalContext = entregaModalState.mode === 'edit'
+      ? {
+          originalItemId: entregaModalState.originalItemId,
+          originalCodigo: entregaModalState.originalCodigo,
+          originalQuantity: entregaModalState.originalQuantity
+        }
+      : undefined
+    return validateEntregaForm(entregaForm, itemsById, originalContext)
+  }, [
+    entregaForm,
+    itemsById,
+    entregaModalState.mode,
+    entregaModalState.originalItemId,
+    entregaModalState.originalCodigo,
+    entregaModalState.originalQuantity
+  ])
 
   const sortedItems = useMemo(() => {
     const collator = new Intl.Collator('es', { sensitivity: 'base' })
