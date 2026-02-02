@@ -18,8 +18,8 @@ const QUERIES = {
       rol
     }
   }`,
-  items: `query Items {
-    items {
+  items: `query Items($soloConStock: Boolean = false) {
+    items(soloConStock: $soloConStock) {
       id
       categoriaId
       ubicacionId
@@ -773,6 +773,7 @@ export default function App() {
   const [categorias, setCategorias] = useState([])
   const [ubicaciones, setUbicaciones] = useState([])
   const [items, setItems] = useState([])
+  const [hideZeroInventory, setHideZeroInventory] = useState(() => localStorage.getItem('inventarioHideZero') === 'true')
   const [recepciones, setRecepciones] = useState([])
   const [entregas, setEntregas] = useState([])
   const [kardex, setKardex] = useState(null)
@@ -838,6 +839,10 @@ export default function App() {
   })
   const [stockAdjustmentPrompt, setStockAdjustmentPrompt] = useState({ open: false, intent: null })
   const [stockPromptSubmitting, setStockPromptSubmitting] = useState(false)
+
+  useEffect(() => {
+    localStorage.setItem('inventarioHideZero', hideZeroInventory ? 'true' : 'false')
+  }, [hideZeroInventory])
   const [manualAdjustments, setManualAdjustments] = useState([])
   const [duplicateCodePrompt, setDuplicateCodePrompt] = useState({
     open: false,
@@ -2263,6 +2268,8 @@ export default function App() {
                     onExport={(type, rows) => handleExport(type, rows ?? items)}
                     hasCategorias={categorias.length > 0}
                     hasUbicaciones={ubicaciones.length > 0}
+                    hideZeroStock={hideZeroInventory}
+                    onToggleHideZero={(nextValue) => setHideZeroInventory(Boolean(nextValue))}
                   />
                 </ProtectedRoute>
               )}
@@ -2975,7 +2982,9 @@ function InventoryPage({
   onRequestDelete,
   onExport,
   hasCategorias,
-  hasUbicaciones
+  hasUbicaciones,
+  hideZeroStock = false,
+  onToggleHideZero = () => {}
 }) {
   const canCreateItems = hasCategorias && hasUbicaciones
   const creationHint = useMemo(() => {
@@ -3018,9 +3027,18 @@ function InventoryPage({
   const normalizedUbicacion = useMemo(() => (
     filters.ubicacion === 'all' ? 'all' : filters.ubicacion.trim().toLowerCase()
   ), [filters.ubicacion])
+  const zeroStockCount = useMemo(() => {
+    return items.reduce((total, item) => {
+      const stock = Number(item.cantidadStock ?? 0)
+      return stock <= 0 ? total + 1 : total
+    }, 0)
+  }, [items])
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
+      if (hideZeroStock && Number(item.cantidadStock ?? 0) <= 0) {
+        return false
+      }
       const categoria = item.nombreMaterial?.trim().toLowerCase() ?? ''
       const ubicacion = item.localizacion?.trim().toLowerCase() ?? ''
       const descripcion = item.descripcionMaterial?.toLowerCase() ?? ''
@@ -3029,12 +3047,12 @@ function InventoryPage({
       const matchesSearch = !normalizedSearch || [codigoMaterial, categoria, descripcion].some((value) => value.includes(normalizedSearch))
       return matchesUbicacion && matchesSearch
     })
-  }, [items, normalizedSearch, normalizedUbicacion])
+  }, [hideZeroStock, items, normalizedSearch, normalizedUbicacion])
   const visibleRowIds = useMemo(() => filteredItems.map((item) => buildRowKey(item)), [buildRowKey, filteredItems])
 
   useEffect(() => {
     setPage(1)
-  }, [filters])
+  }, [filters, hideZeroStock])
 
   useEffect(() => {
     setSelectedRowIds((prev) => {
@@ -3136,6 +3154,9 @@ function InventoryPage({
         </div>
         <div className="table-header-actions">
           {loadingItems && <span className="pill">Cargando…</span>}
+          {hideZeroStock && zeroStockCount > 0 && (
+            <span className="pill muted">Ocultando {zeroStockCount} sin stock</span>
+          )}
           <button
             className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
             type="button"
@@ -3174,6 +3195,18 @@ function InventoryPage({
                 <option key={ubicacion} value={ubicacion}>{ubicacion}</option>
               ))}
             </select>
+          </label>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={hideZeroStock}
+              onChange={(e) => onToggleHideZero(e.target.checked)}
+              aria-label="Ocultar items sin stock"
+            />
+            <span>
+              Ocultar items sin stock
+              {zeroStockCount > 0 ? ` (${zeroStockCount})` : ''}
+            </span>
           </label>
         </div>
         <SelectionToolbar
