@@ -381,7 +381,7 @@ const QUANTITY_LIMITS = {
 
 const CODE_REGEX = /^[A-Z0-9-]+$/
 const CODE_WITH_SPACES_REGEX = /^[A-Z0-9- ]+$/
-const PLAIN_TEXT_REGEX = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]+$/
+const PLAIN_TEXT_REGEX = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()/\'\-\s]+$/
 const CATEGORY_PALETTE = ['#0f766e', '#2563eb', '#f97316', '#0ea5e9', '#dc2626', '#059669', '#f59e0b']
 const UNIT_OPTIONS = Object.freeze(['Lt', 'Kg', 'Mts', 'Und', 'QQ', 'Pqtes', 'Pzas', 'Mt2', 'Mt3'])
 const UNIT_LOOKUP = UNIT_OPTIONS.reduce((acc, option) => {
@@ -425,7 +425,7 @@ const sanitizePlainText = (value, maxLength, { titleCaseEnabled = false, preserv
   const hadTrailingSpace = preserveTrailingSpace && /\s$/.test(value)
   let normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim()
   if (!PLAIN_TEXT_REGEX.test(normalized)) {
-    normalized = normalized.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()'\-\s]/g, '')
+    normalized = normalized.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9.,()/\'\-\s]/g, '')
   }
   normalized = normalized.slice(0, maxLength)
   if (titleCaseEnabled && normalized) {
