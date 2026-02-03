@@ -389,6 +389,35 @@ const UNIT_LOOKUP = UNIT_OPTIONS.reduce((acc, option) => {
   return acc
 }, {})
 
+const UNKNOWN_CATEGORY_KEY = '__sin_categoria__'
+
+const getCategoryKey = (categoriaId) => {
+  if (typeof categoriaId === 'string') {
+    const normalized = categoriaId.trim()
+    if (normalized) {
+      return normalized
+    }
+  }
+  return UNKNOWN_CATEGORY_KEY
+}
+
+const buildCategoryOptions = (usageMap = {}, categoriaLookup = {}) => {
+  const collator = new Intl.Collator('es', { sensitivity: 'base' })
+  return Object.entries(usageMap)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => {
+      const label = key === UNKNOWN_CATEGORY_KEY
+        ? 'Sin categoría'
+        : (categoriaLookup[key]?.nombre?.trim() || 'Categoría sin nombre')
+      return {
+        id: key,
+        label,
+        count
+      }
+    })
+    .sort((a, b) => collator.compare(a.label, b.label))
+}
+
 const getCanonicalUnit = (value) => {
   if (!value) return null
   const normalized = String(value).trim().toUpperCase()
@@ -1215,6 +1244,15 @@ export default function App() {
       return acc
     }, {})
   }, [items])
+
+  const categoriaLookup = useMemo(() => {
+    return categorias.reduce((acc, categoria) => {
+      if (categoria?.id) {
+        acc[categoria.id] = categoria
+      }
+      return acc
+    }, {})
+  }, [categorias])
 
   const itemValidation = useMemo(() => validateItemForm(itemForm), [itemForm])
   const categoriaValidation = useMemo(() => validateCategoriaForm(categoriaForm), [categoriaForm])
@@ -2266,6 +2304,7 @@ export default function App() {
                     onRequestEdit={(item) => openItemModal('edit', item)}
                     onRequestDelete={(item) => openConfirmDialog('item', item)}
                     onExport={(type, rows) => handleExport(type, rows ?? items)}
+                    categoriaLookup={categoriaLookup}
                     hasCategorias={categorias.length > 0}
                     hasUbicaciones={ubicaciones.length > 0}
                     hideZeroStock={hideZeroInventory}
@@ -2306,6 +2345,7 @@ export default function App() {
                     formatDate={formatDate}
                     formatDecimal={formatDecimal}
                     itemsByCodigo={itemsByCodigo}
+                    categoriaLookup={categoriaLookup}
                     onRequestAdd={() => openRecepcionModal('create')}
                     onRequestEdit={(record) => openRecepcionModal('edit', record)}
                     onRequestDelete={(record) => openConfirmDialog('recepcion', record)}
@@ -2337,6 +2377,7 @@ export default function App() {
                     formatDate={formatDate}
                     formatDecimal={formatDecimal}
                     itemsByCodigo={itemsByCodigo}
+                    categoriaLookup={categoriaLookup}
                     onRequestAdd={() => openEntregaModal('create')}
                     onRequestEdit={(record) => openEntregaModal('edit', record)}
                     onRequestDelete={(record) => openConfirmDialog('entrega', record)}
@@ -2973,6 +3014,118 @@ function ExportMenu({ onExportExcel, onExportPdf }) {
   )
 }
 
+function CategoryHideFilter({
+  label = 'Ocultar',
+  options = [],
+  selectedIds = [],
+  onChange = () => {}
+}) {
+  const [panelOpen, setPanelOpen] = useState(false)
+  const containerRef = useRef(null)
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const activeCount = selectedIds.length
+  const panelId = useId()
+
+  useEffect(() => {
+    if (!panelOpen) return
+
+    const handlePointer = (event) => {
+      if (!containerRef.current) return
+      if (containerRef.current.contains(event.target)) return
+      setPanelOpen(false)
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setPanelOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointer)
+    document.addEventListener('touchstart', handlePointer)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointer)
+      document.removeEventListener('touchstart', handlePointer)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [panelOpen])
+
+  const toggleCategory = (categoryId) => {
+    if (!categoryId) return
+    if (selectedSet.has(categoryId)) {
+      onChange(selectedIds.filter((id) => id !== categoryId))
+    } else {
+      onChange([...selectedIds, categoryId])
+    }
+  }
+
+  const handleClear = () => {
+    if (activeCount === 0) return
+    onChange([])
+  }
+
+  return (
+    <div className="category-filter" ref={containerRef}>
+      <span className="category-filter-label">Categorías</span>
+      <button
+        type="button"
+        className={`category-filter-trigger ${panelOpen ? 'is-open' : ''}`}
+        onClick={() => setPanelOpen((prev) => !prev)}
+        aria-haspopup="true"
+        aria-expanded={panelOpen ? 'true' : 'false'}
+        aria-controls={panelId}
+      >
+        {label}
+        {activeCount > 0 && <span className="category-filter-counter">{activeCount}</span>}
+      </button>
+      {panelOpen && (
+        <div className="category-filter-panel" id={panelId} role="menu">
+          {options.length === 0 ? (
+            <p className="category-filter-empty">No hay categorías con registros disponibles.</p>
+          ) : (
+            <ul className="category-filter-options">
+              {options.map((option) => {
+                const checked = selectedSet.has(option.id)
+                const countLabel = option.count === 1 ? '1 ítem' : `${option.count} ítems`
+                return (
+                  <li key={option.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleCategory(option.id)}
+                      />
+                      <span>
+                        {option.label}
+                        <small>{countLabel}</small>
+                      </span>
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          <div className="category-filter-footer">
+            <button
+              type="button"
+              className="btn link compact"
+              onClick={handleClear}
+              disabled={activeCount === 0}
+            >
+              Mostrar todas
+            </button>
+            <button type="button" className="btn outline compact" onClick={() => setPanelOpen(false)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function InventoryPage({
   items,
   loadingItems,
@@ -2984,7 +3137,8 @@ function InventoryPage({
   hasCategorias,
   hasUbicaciones,
   hideZeroStock = false,
-  onToggleHideZero = () => {}
+  onToggleHideZero = () => {},
+  categoriaLookup = {}
 }) {
   const canCreateItems = hasCategorias && hasUbicaciones
   const creationHint = useMemo(() => {
@@ -3009,6 +3163,7 @@ function InventoryPage({
     ubicacion: 'all',
     search: ''
   })
+  const [hiddenCategoryIds, setHiddenCategoryIds] = useState([])
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [selectionMode, setSelectionMode] = useState(false)
@@ -3023,6 +3178,18 @@ function InventoryPage({
     return Array.from(new Set(valores)).sort()
   }, [items])
 
+  const inventoryCategoryUsage = useMemo(() => {
+    return items.reduce((acc, item) => {
+      const key = getCategoryKey(item?.categoriaId)
+      acc[key] = (acc[key] ?? 0) + 1
+      return acc
+    }, {})
+  }, [items])
+
+  const inventoryCategoryOptions = useMemo(() => (
+    buildCategoryOptions(inventoryCategoryUsage, categoriaLookup)
+  ), [categoriaLookup, inventoryCategoryUsage])
+
   const normalizedSearch = useMemo(() => filters.search.trim().toLowerCase(), [filters.search])
   const normalizedUbicacion = useMemo(() => (
     filters.ubicacion === 'all' ? 'all' : filters.ubicacion.trim().toLowerCase()
@@ -3035,8 +3202,13 @@ function InventoryPage({
   }, [items])
 
   const filteredItems = useMemo(() => {
+    const hiddenSet = hiddenCategoryIds.length ? new Set(hiddenCategoryIds) : null
     return items.filter((item) => {
       if (hideZeroStock && Number(item.cantidadStock ?? 0) <= 0) {
+        return false
+      }
+      const categoryKey = getCategoryKey(item?.categoriaId)
+      if (hiddenSet && hiddenSet.has(categoryKey)) {
         return false
       }
       const categoria = item.nombreMaterial?.trim().toLowerCase() ?? ''
@@ -3047,12 +3219,12 @@ function InventoryPage({
       const matchesSearch = !normalizedSearch || [codigoMaterial, categoria, descripcion].some((value) => value.includes(normalizedSearch))
       return matchesUbicacion && matchesSearch
     })
-  }, [hideZeroStock, items, normalizedSearch, normalizedUbicacion])
+  }, [hideZeroStock, hiddenCategoryIds, items, normalizedSearch, normalizedUbicacion])
   const visibleRowIds = useMemo(() => filteredItems.map((item) => buildRowKey(item)), [buildRowKey, filteredItems])
 
   useEffect(() => {
     setPage(1)
-  }, [filters, hideZeroStock])
+  }, [filters, hideZeroStock, hiddenCategoryIds])
 
   useEffect(() => {
     setSelectedRowIds((prev) => {
@@ -3157,6 +3329,11 @@ function InventoryPage({
           {hideZeroStock && zeroStockCount > 0 && (
             <span className="pill muted">Ocultando {zeroStockCount} sin stock</span>
           )}
+          {hiddenCategoryIds.length > 0 && (
+            <span className="pill muted">
+              Ocultando {hiddenCategoryIds.length === 1 ? '1 categoría' : `${hiddenCategoryIds.length} categorías`}
+            </span>
+          )}
           <button
             className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
             type="button"
@@ -3208,6 +3385,11 @@ function InventoryPage({
               {zeroStockCount > 0 ? ` (${zeroStockCount})` : ''}
             </span>
           </label>
+          <CategoryHideFilter
+            options={inventoryCategoryOptions}
+            selectedIds={hiddenCategoryIds}
+            onChange={setHiddenCategoryIds}
+          />
         </div>
         <SelectionToolbar
           active={selectionMode}
@@ -3726,12 +3908,14 @@ function RecepcionesPage({
   formatDate,
   formatDecimal,
   itemsByCodigo,
+  categoriaLookup = {},
   onRequestAdd,
   onRequestEdit,
   onRequestDelete,
   onExport
 }) {
   const [filters, setFilters] = useState({ search: '', recibido: '' })
+  const [hiddenCategoryIds, setHiddenCategoryIds] = useState([])
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [selectionMode, setSelectionMode] = useState(false)
@@ -3747,6 +3931,10 @@ function RecepcionesPage({
     return recepciones.map((recepcion) => {
       const item = itemsByCodigo[recepcion.codigoMaterial] ?? {}
       const observationDisplay = getObservationDisplayValue(recepcion.observaciones, recepcion.esSinRegistro)
+      const categoriaKey = getCategoryKey(item?.categoriaId)
+      const categoriaNombre = categoriaKey === UNKNOWN_CATEGORY_KEY
+        ? 'Sin categoría'
+        : ((categoriaLookup[categoriaKey]?.nombre?.trim() || item.nombreMaterial) ?? '—')
       return {
         ...recepcion,
         __display: {
@@ -3755,13 +3943,31 @@ function RecepcionesPage({
           unidadMedida: resolveMovementDetail(recepcion.unidadMedida, item.unidadMedida ?? ''),
           observaciones: observationDisplay
         },
-        __categoria: item.nombreMaterial ?? '—'
+        __categoria: categoriaNombre,
+        __categoriaKey: categoriaKey
       }
     })
-  }, [itemsByCodigo, recepciones])
+  }, [categoriaLookup, itemsByCodigo, recepciones])
+
+  const recepcionesCategoryUsage = useMemo(() => {
+    return recepcionesWithDisplay.reduce((acc, recepcion) => {
+      const key = recepcion.__categoriaKey ?? UNKNOWN_CATEGORY_KEY
+      acc[key] = (acc[key] ?? 0) + 1
+      return acc
+    }, {})
+  }, [recepcionesWithDisplay])
+
+  const recepcionesCategoryOptions = useMemo(() => (
+    buildCategoryOptions(recepcionesCategoryUsage, categoriaLookup)
+  ), [categoriaLookup, recepcionesCategoryUsage])
 
   const filteredRecepciones = useMemo(() => {
+    const hiddenSet = hiddenCategoryIds.length ? new Set(hiddenCategoryIds) : null
     return recepcionesWithDisplay.filter((recepcion) => {
+      const categoriaKey = recepcion.__categoriaKey ?? UNKNOWN_CATEGORY_KEY
+      if (hiddenSet && hiddenSet.has(categoriaKey)) {
+        return false
+      }
       const categoria = recepcion.__categoria?.toLowerCase() ?? ''
       const descripcion = recepcion.__display?.descripcionMaterial?.toLowerCase() ?? ''
       const codigo = (recepcion.__display?.codigoMaterial || recepcion.codigoMaterial || '').toLowerCase()
@@ -3769,7 +3975,7 @@ function RecepcionesPage({
       const matchesRecibido = !normalizedRecibido || recepcion.recibidoDe?.toLowerCase().includes(normalizedRecibido)
       return matchesSearch && matchesRecibido
     })
-  }, [normalizedRecibido, normalizedSearch, recepcionesWithDisplay])
+  }, [hiddenCategoryIds, normalizedRecibido, normalizedSearch, recepcionesWithDisplay])
 
   const orderedRecepciones = useMemo(() => {
     const sorted = [...filteredRecepciones]
@@ -3791,7 +3997,7 @@ function RecepcionesPage({
 
   useEffect(() => {
     setPage(1)
-  }, [filters])
+  }, [filters, hiddenCategoryIds])
 
   useEffect(() => {
     setSelectedRowIds((prev) => {
@@ -3892,6 +4098,11 @@ function RecepcionesPage({
         </div>
         <div className="table-header-actions">
           {loadingRecepciones && <span className="pill">Cargando…</span>}
+          {hiddenCategoryIds.length > 0 && (
+            <span className="pill muted">
+              Ocultando {hiddenCategoryIds.length === 1 ? '1 categoría' : `${hiddenCategoryIds.length} categorías`}
+            </span>
+          )}
           <button
             className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
             type="button"
@@ -3928,6 +4139,11 @@ function RecepcionesPage({
               placeholder="Proveedor o persona"
             />
           </label>
+          <CategoryHideFilter
+            options={recepcionesCategoryOptions}
+            selectedIds={hiddenCategoryIds}
+            onChange={setHiddenCategoryIds}
+          />
         </div>
         <SelectionToolbar
           active={selectionMode}
@@ -4034,12 +4250,14 @@ function EntregasPage({
   formatDate,
   formatDecimal,
   itemsByCodigo,
+  categoriaLookup = {},
   onRequestAdd,
   onRequestEdit,
   onRequestDelete,
   onExport
 }) {
   const [filters, setFilters] = useState({ search: '', entregado: '' })
+  const [hiddenCategoryIds, setHiddenCategoryIds] = useState([])
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [selectionMode, setSelectionMode] = useState(false)
@@ -4055,6 +4273,10 @@ function EntregasPage({
     return entregas.map((entrega) => {
       const item = itemsByCodigo[entrega.codigoMaterial] ?? {}
       const observationDisplay = getObservationDisplayValue(entrega.observaciones, entrega.esSinRegistro)
+      const categoriaKey = getCategoryKey(item?.categoriaId)
+      const categoriaNombre = categoriaKey === UNKNOWN_CATEGORY_KEY
+        ? 'Sin categoría'
+        : ((categoriaLookup[categoriaKey]?.nombre?.trim() || item.nombreMaterial) ?? '—')
       return {
         ...entrega,
         __display: {
@@ -4063,13 +4285,31 @@ function EntregasPage({
           unidadMedida: resolveMovementDetail(entrega.unidadMedida, item.unidadMedida ?? ''),
           observaciones: observationDisplay
         },
-        __categoria: item.nombreMaterial ?? '—'
+        __categoria: categoriaNombre,
+        __categoriaKey: categoriaKey
       }
     })
-  }, [entregas, itemsByCodigo])
+  }, [categoriaLookup, entregas, itemsByCodigo])
+
+  const entregasCategoryUsage = useMemo(() => {
+    return entregasWithDisplay.reduce((acc, entrega) => {
+      const key = entrega.__categoriaKey ?? UNKNOWN_CATEGORY_KEY
+      acc[key] = (acc[key] ?? 0) + 1
+      return acc
+    }, {})
+  }, [entregasWithDisplay])
+
+  const entregasCategoryOptions = useMemo(() => (
+    buildCategoryOptions(entregasCategoryUsage, categoriaLookup)
+  ), [categoriaLookup, entregasCategoryUsage])
 
   const filteredEntregas = useMemo(() => {
+    const hiddenSet = hiddenCategoryIds.length ? new Set(hiddenCategoryIds) : null
     return entregasWithDisplay.filter((entrega) => {
+      const categoriaKey = entrega.__categoriaKey ?? UNKNOWN_CATEGORY_KEY
+      if (hiddenSet && hiddenSet.has(categoriaKey)) {
+        return false
+      }
       const categoria = entrega.__categoria?.toLowerCase() ?? ''
       const descripcion = entrega.__display?.descripcionMaterial?.toLowerCase() ?? ''
       const codigo = (entrega.__display?.codigoMaterial || entrega.codigoMaterial || '').toLowerCase()
@@ -4077,7 +4317,7 @@ function EntregasPage({
       const matchesEntregado = !normalizedEntregado || entrega.entregadoA?.toLowerCase().includes(normalizedEntregado)
       return matchesSearch && matchesEntregado
     })
-  }, [entregasWithDisplay, normalizedEntregado, normalizedSearch])
+  }, [entregasWithDisplay, hiddenCategoryIds, normalizedEntregado, normalizedSearch])
 
   const orderedEntregas = useMemo(() => {
     const sorted = [...filteredEntregas]
@@ -4099,7 +4339,7 @@ function EntregasPage({
 
   useEffect(() => {
     setPage(1)
-  }, [filters])
+  }, [filters, hiddenCategoryIds])
 
   useEffect(() => {
     setSelectedRowIds((prev) => {
@@ -4200,6 +4440,11 @@ function EntregasPage({
         </div>
         <div className="table-header-actions">
           {loadingEntregas && <span className="pill">Cargando…</span>}
+          {hiddenCategoryIds.length > 0 && (
+            <span className="pill muted">
+              Ocultando {hiddenCategoryIds.length === 1 ? '1 categoría' : `${hiddenCategoryIds.length} categorías`}
+            </span>
+          )}
           <button
             className={`btn outline compact ${selectionMode ? 'is-active' : ''}`}
             type="button"
@@ -4236,6 +4481,11 @@ function EntregasPage({
               placeholder="Área solicitante"
             />
           </label>
+          <CategoryHideFilter
+            options={entregasCategoryOptions}
+            selectedIds={hiddenCategoryIds}
+            onChange={setHiddenCategoryIds}
+          />
         </div>
         <SelectionToolbar
           active={selectionMode}

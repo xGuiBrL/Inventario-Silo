@@ -1807,6 +1807,113 @@ footer {
   box-shadow: 0 0 0 3px rgba(3, 142, 105, 0.2);
 }
 
+.category-filter {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.category-filter-label {
+  font-size: 0.85rem;
+  color: var(--green-900);
+}
+
+.category-filter-trigger {
+  border-radius: 18px;
+  border: 1px solid rgba(13, 77, 60, 0.25);
+  background: rgba(255, 255, 255, 0.95);
+  padding: 0.85rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--green-900);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  cursor: pointer;
+  transition: border 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.category-filter-trigger:hover {
+  transform: translateY(-1px);
+}
+
+.category-filter-trigger.is-open {
+  border-color: rgba(3, 142, 105, 0.8);
+  box-shadow: 0 0 0 3px rgba(3, 142, 105, 0.2);
+}
+
+.category-filter-counter {
+  background: rgba(3, 142, 105, 0.15);
+  color: var(--green-900);
+  border-radius: 999px;
+  padding: 0.1rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.category-filter-panel {
+  position: absolute;
+  top: calc(100% + 0.75rem);
+  left: 0;
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 22px;
+  padding: 1rem 1.25rem 1.25rem;
+  box-shadow: 0 25px 55px rgba(8, 51, 38, 0.16);
+  border: 1px solid rgba(13, 77, 60, 0.12);
+  z-index: 15;
+}
+
+.category-filter-options {
+  list-style: none;
+  margin: 0 0 1rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.category-filter-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 600;
+  color: var(--green-900);
+}
+
+.category-filter-options label input {
+  width: 1rem;
+  height: 1rem;
+}
+
+.category-filter-options label span {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.category-filter-options label small {
+  font-size: 0.8rem;
+  color: var(--gray-500);
+  font-weight: 500;
+}
+
+.category-filter-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.category-filter-empty {
+  margin: 0 0 1rem 0;
+  color: var(--gray-500);
+  font-size: 0.9rem;
+}
+
 .search-field {
   position: relative;
 }
